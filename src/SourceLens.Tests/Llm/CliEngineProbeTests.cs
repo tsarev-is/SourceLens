@@ -27,8 +27,8 @@ public class CliEngineProbeTests
     [Platform("Linux")]
     public async Task Probe_BinaryFromPath_ResolvesAbsolutePathAndVersion()
     {
-        // ffmpeg присутствует в системе по условиям окружения (/usr/bin/ffmpeg)
-        var result = await CliEngineProbe.Probe("ffmpeg");
+        // sh гарантированно есть на PATH в любой Linux-системе (POSIX), в т.ч. на CI-раннерах
+        var result = await CliEngineProbe.Probe("sh");
 
         Assert.That(result.Found, Is.True);
         Assert.That(Path.IsPathRooted(result.ResolvedPath), Is.True);
