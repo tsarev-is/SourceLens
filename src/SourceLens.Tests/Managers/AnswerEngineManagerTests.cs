@@ -67,6 +67,37 @@ public class AnswerEngineManagerTests
     }
 
     [Test]
+    public void SetBinaryPath_ActiveProvider_PersistsAndRecreatesClient()
+    {
+        var calls = new List<(string Provider, string Model)>();
+        var settings = new EngineSettings(GetContext, "Claude", "sonnet", "gpt-5-codex", "claude", "codex");
+        var manager = new AnswerEngineManager((p, m) => { calls.Add((p, m)); return new FakeEngine(); }, settings);
+        var before = manager.Current;
+
+        manager.SetBinaryPath("Claude", "/opt/claude/bin/claude");
+
+        Assert.That(manager.Current, Is.Not.SameAs(before), "active engine client must be recreated with the new path");
+        Assert.That(calls[^1], Is.EqualTo(("Claude", "sonnet")));
+        Assert.That(manager.GetBinaryPath("Claude"), Is.EqualTo("/opt/claude/bin/claude"));
+        using var ctx = GetContext();
+        Assert.That(ctx.GetSetting(EngineSettings.ClaudeBinaryPathKey), Is.EqualTo("/opt/claude/bin/claude"));
+    }
+
+    [Test]
+    public void SetBinaryPath_InactiveProvider_PersistsWithoutRecreatingClient()
+    {
+        var settings = new EngineSettings(GetContext, "Claude", "sonnet", "gpt-5-codex", "claude", "codex");
+        var manager = new AnswerEngineManager((_, _) => new FakeEngine(), settings);
+        var before = manager.Current;
+
+        manager.SetBinaryPath("Codex", "/opt/codex/bin/codex");
+
+        Assert.That(manager.Current, Is.SameAs(before), "inactive engine change must not touch the current client");
+        Assert.That(manager.GetBinaryPath("Codex"), Is.EqualTo("/opt/codex/bin/codex"));
+        Assert.That(manager.GetBinaryPath("Claude"), Is.EqualTo("claude"), "no override saved — config default stays");
+    }
+
+    [Test]
     public void EngineLabel_NoProvider_IsNotConnected()
     {
         var manager = new AnswerEngineManager((_, _) => new FakeEngine(), new EngineSettings(GetContext));

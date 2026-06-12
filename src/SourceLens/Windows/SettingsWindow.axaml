@@ -40,6 +40,16 @@
             <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="Padding" Value="11,7"/>
         </Style>
+
+        <Style Selector="TextBox.dark">
+            <Setter Property="Background" Value="#101216"/>
+            <Setter Property="Foreground" Value="#e6e8ec"/>
+            <Setter Property="BorderBrush" Value="#2a2e37"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Padding" Value="11,7"/>
+        </Style>
     </Window.Styles>
 
     <DockPanel>

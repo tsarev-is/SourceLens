@@ -36,7 +36,6 @@ public partial class RagWindow : Window
     private static readonly IBrush StatusBusyBrush = Brush.Parse("#e3b341");
     private static readonly IBrush StatusErrorBrush = Brush.Parse("#e5534b");
     private static readonly IBrush AccentBrush = Brush.Parse("#6aa6ff");
-    private static readonly IBrush PendingBrush = Brush.Parse("#5b626e");
     private static readonly IBrush RecordIdleDotBrush = Brush.Parse("#7a818d");
     private static readonly IBrush RecordActiveBgBrush = Brush.Parse("#1FE5534B");
     private static readonly IBrush RecordActiveBorderBrush = Brush.Parse("#73E5534B");
@@ -61,11 +60,12 @@ public partial class RagWindow : Window
     private readonly UiRecorder _inputRecorder;
     private readonly RagDialogManager _dialogManager;
     private readonly SourceLibraryManager? _libraryManager;
-    private readonly Func<EngineOption, Task<CliProbeResult>> _probe;
+    private readonly Func<EngineOption, string, Task<CliProbeResult>> _probe;
     private readonly EngineOption[] _engineOptions;
 
     private UiState _state = UiState.Ready;
     private RagExchangeView? _viewExchange;
+    private int? _viewSessionId;
     private string _livePrompt = string.Empty;
     private string _liveAnswer = string.Empty;
     private KnowledgeChunk[] _liveSources = Array.Empty<KnowledgeChunk>();
@@ -78,7 +78,7 @@ public partial class RagWindow : Window
         UiRecorder inputRecorder,
         RagDialogManager dialogManager,
         SourceLibraryManager? libraryManager,
-        Func<EngineOption, Task<CliProbeResult>> probe,
+        Func<EngineOption, string, Task<CliProbeResult>> probe,
         EngineOption[] engineOptions)
     {
         _engineManager = engineManager;
@@ -112,7 +112,7 @@ public partial class RagWindow : Window
         EngineLabelText.Text = _engineManager.EngineLabel;
         MaxDepthText.Text = $"max {_dialogManager.Options.HistoryDepth}";
 
-        // Старт: последняя сессия уже поднята менеджером — «восстановленный контекст».
+        // Старт: менеджер уже создал новый пустой диалог; прошлые диалоги доступны из History.
         ReloadHistory();
         UpdateContextIndicator();
         RenderAnswer(string.Empty);
@@ -202,16 +202,16 @@ public partial class RagWindow : Window
     {
         HistoryPanel.Children.Clear();
 
-        // Плоский список по дате (новые сверху): обмен возобновлённого старого диалога
-        // должен встать под сегодняшний разделитель, а не под дату создания сессии.
-        var rows = new List<(DateTimeOffset At, int Order, RagSessionItem Session, RagExchangeView? Exchange)>();
+        // Одна строка на диалог (отклонение от мокапа по требованию пользователя): повторный Send
+        // обновляет строку текущего диалога, а не добавляет новую. Диалог встаёт под дату последней
+        // активности — возобновлённый старый диалог поднимается под сегодняшний разделитель.
+        var rows = new List<(DateTimeOffset At, int Order, RagSessionItem Session, RagExchangeView? LastExchange)>();
         foreach (var session in _dialogManager.GetSessions())
         {
             var exchanges = _dialogManager.GetExchanges(session.Id);
-            if (exchanges.Length == 0)
-                rows.Add((session.CreatedAt, 0, session, null));
-            foreach (var exchange in exchanges)
-                rows.Add((exchange.CreatedAt, exchange.Id, session, exchange));
+            rows.Add(exchanges.Length == 0
+                ? (session.CreatedAt, 0, session, null)
+                : (exchanges[^1].CreatedAt, exchanges[^1].Id, session, exchanges[^1]));
         }
 
         string? lastDate = null;
@@ -224,7 +224,7 @@ public partial class RagWindow : Window
                 lastDate = label;
             }
 
-            HistoryPanel.Children.Add(BuildHistoryRow(row.Session, row.Exchange));
+            HistoryPanel.Children.Add(BuildHistoryRow(row.Session, row.LastExchange));
         }
 
         HistoryEmptyText.IsVisible = rows.Count == 0;
@@ -269,7 +269,8 @@ public partial class RagWindow : Window
     private Border BuildHistoryRow(RagSessionItem session, RagExchangeView? exchange)
     {
         var isEmpty = exchange == null;
-        var selected = exchange != null && _viewExchange?.Id == exchange.Id;
+        // Подсветка — текущий диалог: видно, куда уйдёт следующий Send.
+        var selected = session.Id == _dialogManager.CurrentSession.Id;
 
         var dot = new Ellipse
         {
@@ -282,7 +283,10 @@ public partial class RagWindow : Window
 
         var question = new TextBlock
         {
-            Text = isEmpty ? "(empty dialog)" : Truncate(exchange!.Question, 50),
+            // Заголовок диалога — его название (первый вопрос); сниппет — последний ответ.
+            Text = isEmpty
+                ? "(empty dialog)"
+                : Truncate(string.IsNullOrWhiteSpace(session.Title) ? exchange!.Question : session.Title!, 50),
             FontSize = 12,
             Foreground = isEmpty ? RowMutedBrush : selected ? RowQuestionSelectedBrush : RowQuestionBrush,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -335,10 +339,7 @@ public partial class RagWindow : Window
         {
             try
             {
-                if (isEmpty)
-                    await DeleteSessionAsync(session.Id);
-                else
-                    await DeleteExchangeAsync(exchange!.Id);
+                await DeleteSessionAsync(session.Id);
             }
             catch (Exception ex)
             {
@@ -367,25 +368,18 @@ public partial class RagWindow : Window
         if (exchange != null)
             row.PointerPressed += (_, _) => OpenExchange(session, exchange);
         else
-            row.PointerPressed += (_, _) => { };
+            row.PointerPressed += (_, _) => OpenEmptySession(session);
 
         return row;
-    }
-
-    internal async Task DeleteExchangeAsync(int exchangeId)
-    {
-        await _dialogManager.DeleteExchange(exchangeId);
-        if (_viewExchange?.Id == exchangeId)
-            ReturnToLive();
-        else
-            ReloadHistory();
-        UpdateContextIndicator();
     }
 
     internal async Task DeleteSessionAsync(int sessionId)
     {
         await _dialogManager.DeleteSession(sessionId);
-        ReloadHistory();
+        if (_viewSessionId == sessionId)
+            ReturnToLive();
+        else
+            ReloadHistory();
         UpdateContextIndicator();
     }
 
@@ -411,7 +405,22 @@ public partial class RagWindow : Window
     internal async Task StartNewDialogAsync()
     {
         await _dialogManager.StartNewSession();
+        ResetWorkbenchToLive();
+    }
+
+    /// <summary>
+    /// Клик по строке «(empty dialog)»: пустой диалог становится текущим (Send продолжит его).
+    /// </summary>
+    internal void OpenEmptySession(RagSessionItem session)
+    {
+        _dialogManager.ResumeSession(session.Id);
+        ResetWorkbenchToLive();
+    }
+
+    private void ResetWorkbenchToLive()
+    {
         _viewExchange = null;
+        _viewSessionId = null;
         ViewBanner.IsVisible = false;
         PromptBox.IsReadOnly = false;
         PromptHintText.Text = "editable";
@@ -436,6 +445,7 @@ public partial class RagWindow : Window
         UpdateContextIndicator();
 
         _viewExchange = exchange;
+        _viewSessionId = session.Id;
         ViewBannerText.Text = $"Viewing saved exchange · {(string.IsNullOrWhiteSpace(session.Title) ? "dialog" : session.Title)}";
         ViewBanner.IsVisible = true;
         PromptBox.Text = exchange.Question;
@@ -450,14 +460,12 @@ public partial class RagWindow : Window
     internal void ReturnToLive()
     {
         _viewExchange = null;
+        _viewSessionId = null;
         ViewBanner.IsVisible = false;
         PromptBox.IsReadOnly = false;
         PromptHintText.Text = "editable";
         PromptBox.Text = _livePrompt;
-        if (_state == UiState.Busy)
-            ShowAnswerPending();
-        else
-            RenderAnswer(_liveAnswer);
+        RenderAnswer(_liveAnswer);
         RenderSources(_liveSources);
         ReloadHistory();
         UpdateSendState();
@@ -535,8 +543,8 @@ public partial class RagWindow : Window
         _summaryCts = new CancellationTokenSource();
 
         SetBusy(RagPhase.Retrieving);
-        ShowAnswerPending();
-        _liveAnswer = string.Empty;
+        // Предыдущий ответ не очищаем на время генерации — прогресс виден по статусу
+        // «retrieving…/generating…»; Answer заменяется только готовым результатом (или ошибкой).
         _liveSources = Array.Empty<KnowledgeChunk>();
         RenderSources(Array.Empty<KnowledgeChunk>());
 
@@ -549,19 +557,27 @@ public partial class RagWindow : Window
             });
             var result = await _dialogManager.Ask(question, _summaryCts.Token, progress);
 
+            // Вопрос остаётся в поле (отличие от мокапа): очистка промпта после Send выглядела
+            // как переключение на новый диалог. Workbench сбрасывается только кнопкой New dialog.
             _liveAnswer = result.Answer;
             _liveSources = result.Sources;
-            _livePrompt = string.Empty;
-            if (_viewExchange == null)
+            _livePrompt = question;
+            SetReady();
+            if (_viewExchange != null)
+            {
+                // Ответ готов — возвращаемся из просмотра сохранённого обмена к активному диалогу,
+                // чтобы свежий ответ был виден сразу.
+                ReturnToLive();
+            }
+            else
             {
                 RenderAnswer(result.Answer);
                 RenderSources(result.Sources);
-                PromptBox.Text = string.Empty;
+                PromptBox.Text = question;
             }
 
             ReloadHistory();
             UpdateContextIndicator();
-            SetReady();
         }
         catch (Exception exception)
         {
@@ -673,16 +689,19 @@ public partial class RagWindow : Window
 
     private void RenderAnswer(string text)
     {
-        AnswerBlock.Inlines!.Clear();
+        // Сброс выделения до замены контента: индексы селекции SelectableTextBlock
+        // не клампятся при замене и могут указывать за пределы нового текста.
+        AnswerBlock.ClearSelection();
+
         if (string.IsNullOrWhiteSpace(text))
         {
+            AnswerBlock.Inlines = new InlineCollection();
             AnswerBlock.IsVisible = false;
             AnswerPlaceholder.IsVisible = true;
             return;
         }
 
-        AnswerPlaceholder.IsVisible = false;
-        AnswerBlock.IsVisible = true;
+        var inlines = new InlineCollection();
         foreach (var part in Regex.Split(text, @"(\[\d+\])"))
         {
             if (part.Length == 0)
@@ -690,7 +709,7 @@ public partial class RagWindow : Window
 
             if (Regex.IsMatch(part, @"^\[\d+\]$"))
             {
-                AnswerBlock.Inlines.Add(new Run(part)
+                inlines.Add(new Run(part)
                 {
                     Foreground = AccentBrush,
                     FontWeight = FontWeight.SemiBold,
@@ -700,17 +719,22 @@ public partial class RagWindow : Window
             }
             else
             {
-                AnswerBlock.Inlines.Add(new Run(part));
+                inlines.Add(new Run(part));
             }
         }
-    }
 
-    private void ShowAnswerPending()
-    {
+        AnswerBlock.Inlines = inlines;
         AnswerPlaceholder.IsVisible = false;
         AnswerBlock.IsVisible = true;
-        AnswerBlock.Inlines!.Clear();
-        AnswerBlock.Inlines.Add(new Run("…") { Foreground = PendingBrush });
+
+        // Avalonia 11.3: после замены Inlines инвалидация measure обнуляет внутренние text runs,
+        // и кадр, записанный до layout-прохода, рисует TextBlock пустым; новый рендер после layout
+        // не планируется — ANSWER остаётся пустым до следующей перерисовки (гонка проявляется на
+        // втором и последующих ответах при неизменных arrange-bounds; первый ответ всегда цел —
+        // там контрол впервые становится видимым и проходит полный layout до рендера).
+        // Лечение: синхронный layout-проход и принудительная перерисовка уже валидного состояния.
+        AnswerBlock.UpdateLayout();
+        AnswerBlock.InvalidateVisual();
     }
 
     // ---------- SOURCES ----------

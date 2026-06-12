@@ -67,15 +67,26 @@ public class RagDialogManagerTests
     }
 
     [Test]
-    public async Task Constructor_RestoresLastSession()
+    public async Task Constructor_StartsNewDialog_OldSessionsRemainInHistory()
     {
-        await Seed(("old question", "old answer"));
-        var last = await Seed(("latest question", "latest answer"));
+        var old = await Seed(("old question", "old answer"));
 
         var manager = CreateManager();
 
-        Assert.That(manager.CurrentSession.Id, Is.EqualTo(last.Id));
-        Assert.That(manager.BuildPriorContext(), Is.EqualTo("Q: latest question\nA: latest answer"));
+        Assert.That(manager.CurrentSession.Id, Is.Not.EqualTo(old.Id), "старт — всегда новый диалог");
+        Assert.That(manager.BuildPriorContext(), Is.Empty);
+        Assert.That(manager.GetSessions().Select(p => p.Id), Does.Contain(old.Id), "старый диалог остался в истории");
+    }
+
+    [Test]
+    public void Constructor_EmptyLastSession_IsReused()
+    {
+        var first = CreateManager();
+        var second = CreateManager();
+
+        Assert.That(second.CurrentSession.Id, Is.EqualTo(first.CurrentSession.Id),
+            "перезапуски не плодят пустые сессии");
+        Assert.That(second.GetSessions().Length, Is.EqualTo(1));
     }
 
     [Test]
@@ -107,6 +118,45 @@ public class RagDialogManagerTests
         Assert.That(sources.Select(p => p.Score), Is.EqualTo(_retriever.Chunks.Select(p => p.Score)));
     }
 
+    private sealed class DelegatingLlm : AbstractLlmInferences
+    {
+        private readonly Func<string, Task<string>> _onQuestion;
+
+        public DelegatingLlm(Func<string, Task<string>> onQuestion)
+        {
+            _onQuestion = onQuestion;
+        }
+
+        public override Task<string> Question(string input) => _onQuestion(input);
+    }
+
+    [Test]
+    public async Task Ask_CurrentSessionSwitchedDuringGeneration_AnswerLandsInOriginalDialog()
+    {
+        var original = await Seed(("q1", "a1"));
+        var other = await Seed(("other q", "other a"));
+
+        RagDialogManager manager = null!;
+        // Пока «генерируется» ответ, пользователь переключается на другой диалог.
+        var llm = new DelegatingLlm(_ =>
+        {
+            manager.ResumeSession(other.Id);
+            return Task.FromResult("late answer");
+        });
+        manager = new RagDialogManager(() => Global.CreateContext(_builder), () => llm, _retriever,
+            new RetrievalOptions { TopK = 4, MinQueryLength = 1 }, new RagDialogOptions());
+        manager.ResumeSession(original.Id);
+
+        await manager.Ask("follow-up");
+
+        Assert.That(manager.CurrentSession.Id, Is.EqualTo(original.Id),
+            "по завершении ответа диалог вопроса снова текущий");
+        Assert.That(manager.GetExchanges(original.Id).Select(p => p.Question),
+            Is.EqualTo(new[] { "q1", "follow-up" }), "обмен лёг в диалог, из которого задан вопрос");
+        Assert.That(manager.GetExchanges(other.Id).Select(p => p.Question),
+            Is.EqualTo(new[] { "other q" }), "чужой диалог не тронут");
+    }
+
     [Test]
     public async Task Ask_FirstQuestion_SetsSessionTitleTruncatedTo60()
     {
@@ -126,8 +176,9 @@ public class RagDialogManagerTests
     [Test]
     public async Task BuildPriorContext_FormatsPairsInChronologicalOrder()
     {
-        await Seed(("first question", "first answer"), ("second question", "second answer"));
+        var session = await Seed(("first question", "first answer"), ("second question", "second answer"));
         var manager = CreateManager();
+        manager.ResumeSession(session.Id);
 
         Assert.That(manager.BuildPriorContext(),
             Is.EqualTo("Q: first question\nA: first answer\nQ: second question\nA: second answer"));
@@ -137,8 +188,9 @@ public class RagDialogManagerTests
     [Test]
     public async Task BuildPriorContext_TrimsToHistoryDepth()
     {
-        await Seed(("q1", "a1"), ("q2", "a2"), ("q3", "a3"), ("q4", "a4"));
+        var session = await Seed(("q1", "a1"), ("q2", "a2"), ("q3", "a3"), ("q4", "a4"));
         var manager = CreateManager(new RagDialogOptions { HistoryDepth = 2 });
+        manager.ResumeSession(session.Id);
 
         Assert.That(manager.BuildPriorContext(), Is.EqualTo("Q: q3\nA: a3\nQ: q4\nA: a4"));
         Assert.That(manager.ContextSize, Is.EqualTo(2));
@@ -147,9 +199,10 @@ public class RagDialogManagerTests
     [Test]
     public async Task BuildPriorContext_MaxHistoryChars_DropsOldestPairsFirst()
     {
-        await Seed(("old old old", "aaaa"), ("new", "bb"));
+        var session = await Seed(("old old old", "aaaa"), ("new", "bb"));
         // "Q: old old old\nA: aaaa" = 22 chars, "Q: new\nA: bb" = 12 chars; budget 20 keeps only the newest pair.
         var manager = CreateManager(new RagDialogOptions { HistoryDepth = 6, MaxHistoryChars = 20 });
+        manager.ResumeSession(session.Id);
 
         Assert.That(manager.BuildPriorContext(), Is.EqualTo("Q: new\nA: bb"));
         Assert.That(manager.ContextSize, Is.EqualTo(1));
@@ -203,7 +256,7 @@ public class RagDialogManagerTests
         var old = await Seed(("old question", "old answer"));
         var latest = await Seed(("latest question", "latest answer"));
         var manager = CreateManager();
-        Assert.That(manager.CurrentSession.Id, Is.EqualTo(latest.Id));
+        Assert.That(manager.CurrentSession.Id, Is.Not.EqualTo(latest.Id), "старт — новый диалог");
 
         Assert.That(manager.ResumeSession(old.Id), Is.True);
 
@@ -221,16 +274,19 @@ public class RagDialogManagerTests
     {
         var session = await Seed(("a question", "an answer"));
         var manager = CreateManager();
+        var currentId = manager.CurrentSession.Id;
 
         Assert.That(manager.ResumeSession(session.Id + 100), Is.False);
-        Assert.That(manager.CurrentSession.Id, Is.EqualTo(session.Id));
+        Assert.That(manager.CurrentSession.Id, Is.EqualTo(currentId));
     }
 
     [Test]
     public async Task DeleteExchange_SoftDeletes()
     {
-        var session = await Seed(("keep", "a1"), ("remove", "a2"));
         var manager = CreateManager();
+        await manager.Ask("keep");
+        await manager.Ask("remove");
+        var session = manager.CurrentSession;
         var removeId = manager.GetExchanges(session.Id).Single(p => p.Question == "remove").Id;
 
         await manager.DeleteExchange(removeId);
@@ -244,25 +300,25 @@ public class RagDialogManagerTests
     public async Task DeleteExchange_LastExchangeOfSession_HidesSession()
     {
         var emptied = await Seed(("only question", "only answer"));
-        var current = await Seed(("current question", "current answer"));
         var manager = CreateManager();
-        var exchangeId = manager.GetExchanges(emptied.Id).Single().Id;
+        await manager.Ask("current question");
+        var currentId = manager.CurrentSession.Id;
 
-        await manager.DeleteExchange(exchangeId);
+        await manager.DeleteExchange(manager.GetExchanges(emptied.Id).Single().Id);
 
-        Assert.That(manager.GetSessions().Select(p => p.Id), Is.EqualTo(new[] { current.Id }));
-        Assert.That(manager.CurrentSession.Id, Is.EqualTo(current.Id));
+        Assert.That(manager.GetSessions().Select(p => p.Id), Is.EqualTo(new[] { currentId }));
+        Assert.That(manager.CurrentSession.Id, Is.EqualTo(currentId));
     }
 
     [Test]
     public async Task DeleteExchange_LastExchangeOfCurrentSession_FallsBackToPreviousSession()
     {
         var previous = await Seed(("previous question", "previous answer"));
-        var current = await Seed(("current question", "current answer"));
         var manager = CreateManager();
-        Assert.That(manager.CurrentSession.Id, Is.EqualTo(current.Id));
+        await manager.Ask("current question");
+        var currentId = manager.CurrentSession.Id;
 
-        await manager.DeleteExchange(manager.GetExchanges(current.Id).Single().Id);
+        await manager.DeleteExchange(manager.GetExchanges(currentId).Single().Id);
 
         Assert.That(manager.GetSessions().Select(p => p.Id), Is.EqualTo(new[] { previous.Id }));
         Assert.That(manager.CurrentSession.Id, Is.EqualTo(previous.Id));
@@ -272,29 +328,31 @@ public class RagDialogManagerTests
     public async Task DeleteSession_SoftDeletes_AndCurrentFallsBackOrRecreates()
     {
         var previous = await Seed(("previous question", "previous answer"));
-        var current = await Seed(("current question", "current answer"));
         var manager = CreateManager();
+        await manager.Ask("current question");
+        var currentId = manager.CurrentSession.Id;
 
-        await manager.DeleteSession(current.Id);
+        await manager.DeleteSession(currentId);
         Assert.That(manager.GetSessions().Select(p => p.Id), Is.EqualTo(new[] { previous.Id }));
         Assert.That(manager.CurrentSession.Id, Is.EqualTo(previous.Id));
 
         await manager.DeleteSession(previous.Id);
         var remaining = manager.GetSessions();
         Assert.That(remaining.Length, Is.EqualTo(1), "A fresh session is created when the last one is deleted");
-        Assert.That(remaining[0].Id, Is.Not.EqualTo(previous.Id).And.Not.EqualTo(current.Id));
+        Assert.That(remaining[0].Id, Is.Not.EqualTo(previous.Id).And.Not.EqualTo(currentId));
         Assert.That(manager.CurrentSession.Id, Is.EqualTo(remaining[0].Id));
     }
 
     [Test]
     public async Task Ask_PassesChunksThroughLlmContext_AndPriorContextIntoPrompt_AndPersists()
     {
-        await Seed(("prior question", "prior answer"));
+        var session = await Seed(("prior question", "prior answer"));
         _retriever.Chunks = new[]
         {
             new KnowledgeChunk { Text = "retrieved-passage", SourceTitle = "Bk", SourceLocation = "p.7", Score = 0.9f },
         };
         var manager = CreateManager();
+        manager.ResumeSession(session.Id);
         var progress = new RecordingProgress();
 
         var result = await manager.Ask("What does the law say?", progress: progress);

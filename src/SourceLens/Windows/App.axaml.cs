@@ -96,9 +96,9 @@ public partial class App : Application
             });
 
         var engineOptions = BuildEngineOptions(options.AiModel);
-        Func<EngineOption, Task<CliProbeResult>> probe = async option =>
+        Func<EngineOption, string, Task<CliProbeResult>> probe = async (option, binaryPath) =>
         {
-            var result = await CliEngineProbe.Probe(option.BinaryPath);
+            var result = await CliEngineProbe.Probe(binaryPath);
             if (!result.Found)
                 return result;
 
@@ -225,6 +225,18 @@ public partial class App : Application
     {
         var ai = options.AiModel;
 
+        var defaultProvider = ai.Provider switch
+        {
+            GeneralOptions.AiOptions.ProviderKind.Claude => EngineSettings.ClaudeProvider,
+            GeneralOptions.AiOptions.ProviderKind.Codex => EngineSettings.CodexProvider,
+            _ => string.Empty,
+        };
+        var engineSettings = new EngineSettings(getContext, defaultProvider,
+            ai.Claude.DefaultModel, ai.Codex.DefaultModel,
+            ai.Claude.BinaryPath, ai.Codex.BinaryPath);
+
+        // Путь к бинарю читается из настроек при каждом создании клиента,
+        // поэтому смена пути в Settings подхватывается через SetBinaryPath без рестарта.
         AbstractLlmInferences Factory(string provider, string model)
         {
             var effectiveModel = string.IsNullOrWhiteSpace(model) ? null : model;
@@ -232,14 +244,14 @@ public partial class App : Application
             {
                 case EngineSettings.ClaudeProvider:
                     return new ClaudeClient(
-                        ai.Claude.BinaryPath,
+                        engineSettings.GetBinaryPath(EngineSettings.ClaudeProvider),
                         ai.Claude.ExtraArgs,
                         effectiveModel,
                         workingDirectory: null,
                         TimeSpan.FromSeconds(ai.Claude.TimeoutSeconds > 0 ? ai.Claude.TimeoutSeconds : 300));
                 case EngineSettings.CodexProvider:
                     return new CodexClient(
-                        ai.Codex.BinaryPath,
+                        engineSettings.GetBinaryPath(EngineSettings.CodexProvider),
                         ai.Codex.ExtraArgs,
                         effectiveModel,
                         workingDirectory: null,
@@ -250,13 +262,6 @@ public partial class App : Application
             }
         }
 
-        var defaultProvider = ai.Provider switch
-        {
-            GeneralOptions.AiOptions.ProviderKind.Claude => EngineSettings.ClaudeProvider,
-            GeneralOptions.AiOptions.ProviderKind.Codex => EngineSettings.CodexProvider,
-            _ => string.Empty,
-        };
-        var engineSettings = new EngineSettings(getContext, defaultProvider, ai.Claude.DefaultModel, ai.Codex.DefaultModel);
         return new AnswerEngineManager(Factory, engineSettings);
     }
 

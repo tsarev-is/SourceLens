@@ -33,6 +33,9 @@ public class CodexClient : AbstractLlmInferences
         return _runner.RunAsync((startInfo, useStdin) =>
         {
             startInfo.ArgumentList.Add("exec");
+            // Codex refuses to run outside a trusted (git) directory; the app's working
+            // directory is the install folder, so the check must be skipped explicitly.
+            startInfo.ArgumentList.Add("--skip-git-repo-check");
             foreach (var arg in _extraArgs)
                 startInfo.ArgumentList.Add(arg);
             if (!string.IsNullOrWhiteSpace(_model))

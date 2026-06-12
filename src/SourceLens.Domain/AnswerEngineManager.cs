@@ -43,4 +43,21 @@ public class AnswerEngineManager
         Logger.Info("Answer engine switched to {0}", EngineLabel);
         return Current;
     }
+
+    /// <summary>
+    /// Эффективный путь к бинарю CLI движка (override из app_settings или дефолт конфига).
+    /// </summary>
+    public string GetBinaryPath(string provider) => _settings.GetBinaryPath(provider);
+
+    /// <summary>
+    /// Сохраняет путь к бинарю CLI движка; для активного движка пересоздаёт клиента,
+    /// чтобы новый путь применился сразу (фабрика читает путь из настроек).
+    /// </summary>
+    public void SetBinaryPath(string provider, string binaryPath)
+    {
+        _settings.SaveBinaryPath(provider, binaryPath);
+        Logger.Info("CLI binary path for {0} set to '{1}'", provider, binaryPath);
+        if (provider == Provider)
+            Current = _factory(Provider, Model);
+    }
 }

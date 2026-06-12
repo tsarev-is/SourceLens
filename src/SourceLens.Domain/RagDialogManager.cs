@@ -8,7 +8,8 @@ namespace SourceLens.Domain;
 
 /// <summary>
 /// Оркестрация RAG-диалога: ретрив источников, контекст истории, вызов LLM и персист обменов.
-/// Контекст диалога переживает перезапуск: при создании менеджер поднимает последнюю сессию из БД.
+/// Старт приложения — всегда новый пустой диалог (прошлые доступны через ResumeSession);
+/// пустая последняя сессия переиспользуется, чтобы перезапуски не плодили «(empty dialog)».
 /// </summary>
 public class RagDialogManager
 {
@@ -31,20 +32,23 @@ public class RagDialogManager
         Options = options;
 
         using var ctx = _getContext();
-        CurrentSession = ctx.GetLastRagSession() ?? CreateSession(ctx).GetAwaiter().GetResult();
+        var last = ctx.GetLastRagSession();
+        CurrentSession = last != null && ctx.GetRagExchanges(last.Id).Length == 0
+            ? last
+            : CreateSession(ctx).GetAwaiter().GetResult();
     }
 
     public RagDialogOptions Options { get; }
 
     /// <summary>
-    /// Текущий диалог: последняя сессия из БД (восстановленный контекст) или новая.
+    /// Текущий диалог: при старте — новый пустой (или переиспользованная пустая последняя сессия).
     /// </summary>
     public RagSessionItem CurrentSession { get; private set; }
 
     /// <summary>
     /// Сколько пар Q/A реально войдёт в следующий промпт (индикатор «context: N exchanges»).
     /// </summary>
-    public int ContextSize => GetContextPairs().Length;
+    public int ContextSize => GetContextPairs(CurrentSession.Id).Length;
 
     public RagSessionItem[] GetSessions()
     {
@@ -128,17 +132,22 @@ public class RagDialogManager
     /// </summary>
     public string BuildPriorContext()
     {
-        return string.Join("\n", GetContextPairs());
+        return string.Join("\n", GetContextPairs(CurrentSession.Id));
     }
 
     public async Task<RagAskResult> Ask(string question, CancellationToken ct = default, IProgress<RagPhase>? progress = null)
     {
+        // Диалог фиксируется на момент вопроса: если пользователь переключит текущую сессию,
+        // пока генерируется ответ, обмен всё равно ляжет в исходный диалог,
+        // и по завершении этот диалог снова станет текущим.
+        var sessionId = CurrentSession.Id;
+
         progress?.Report(RagPhase.Retrieving);
         var sources = question.Length >= _retrievalOptions.MinQueryLength
             ? await _retriever.Retrieve(question, _retrievalOptions.TopK, ct)
             : Array.Empty<KnowledgeChunk>();
 
-        var priorContext = BuildPriorContext();
+        var priorContext = string.Join("\n", GetContextPairs(sessionId));
         Logger.Info("RAG ask: question {0} chars, {1} sources, prior context {2} chars", question.Length, sources.Length, priorContext.Length);
 
         ct.ThrowIfCancellationRequested();
@@ -148,7 +157,7 @@ public class RagDialogManager
             answer = await _getLlm().AskWithRag(question, priorContext);
 
         await using var ctx = _getContext();
-        var session = ctx.FindRagSession(CurrentSession.Id) ?? await CreateSession(ctx);
+        var session = ctx.FindRagSession(sessionId) ?? await CreateSession(ctx);
         if (string.IsNullOrWhiteSpace(session.Title))
             session.SetTitle(BuildTitle(question));
 
@@ -173,13 +182,13 @@ public class RagDialogManager
             CurrentSession = ctx.GetLastRagSession() ?? await CreateSession(ctx);
     }
 
-    private string[] GetContextPairs()
+    private string[] GetContextPairs(int sessionId)
     {
         if (Options.HistoryDepth <= 0)
             return Array.Empty<string>();
 
         using var ctx = _getContext();
-        var tail = ctx.GetRagExchanges(CurrentSession.Id)
+        var tail = ctx.GetRagExchanges(sessionId)
             .TakeLast(Options.HistoryDepth)
             .Select(p => $"Q: {p.Question}\nA: {p.Answer}")
             .ToArray();

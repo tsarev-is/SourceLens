@@ -62,12 +62,14 @@ public partial class SettingsWindow : Window
 
         public required TextBlock CliTagText { get; init; }
 
+        public required TextBox PathBox { get; init; }
+
         public required ComboBox ModelBox { get; init; }
     }
 
     private readonly AnswerEngineManager _engineManager;
     private readonly EngineOption[] _engineOptions;
-    private readonly Func<EngineOption, Task<CliProbeResult>> _probe;
+    private readonly Func<EngineOption, string, Task<CliProbeResult>> _probe;
     private readonly Action? _engineChanged;
     private readonly Dictionary<string, string> _models = new();
     private readonly List<EngineCard> _cards = new();
@@ -76,7 +78,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(
         AnswerEngineManager engineManager,
         EngineOption[] engineOptions,
-        Func<EngineOption, Task<CliProbeResult>> probe,
+        Func<EngineOption, string, Task<CliProbeResult>> probe,
         Action? engineChanged = null)
     {
         _engineManager = engineManager;
@@ -288,6 +290,14 @@ public partial class SettingsWindow : Window
             Child = cliGrid,
         };
 
+        var pathBox = new TextBox
+        {
+            Text = EffectiveBinaryPath(option),
+            FontFamily = MonoFont,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        pathBox.Classes.Add("dark");
+
         // До ответа CLI в списке только текущая модель; каталог доступных заменит его в ApplyDiscoveredModels.
         var model = _models[option.Provider];
         var modelBox = new ComboBox
@@ -302,6 +312,21 @@ public partial class SettingsWindow : Window
 
         var detailsStack = new StackPanel();
         detailsStack.Children.Add(cliBox);
+        detailsStack.Children.Add(new TextBlock
+        {
+            Text = "CLI path",
+            FontSize = 11,
+            Foreground = Brush.Parse("#9aa1ad"),
+            Margin = new Thickness(0, 13, 0, 6),
+        });
+        detailsStack.Children.Add(pathBox);
+        detailsStack.Children.Add(new TextBlock
+        {
+            Text = "Binary name in PATH or an absolute path. Press Enter to apply.",
+            FontSize = 10.5,
+            Foreground = Brush.Parse("#5f6672"),
+            Margin = new Thickness(0, 5, 0, 0),
+        });
         detailsStack.Children.Add(new TextBlock
         {
             Text = "Model",
@@ -361,10 +386,17 @@ public partial class SettingsWindow : Window
             CliStatusText = cliStatusText,
             CliTag = cliTag,
             CliTagText = cliTagText,
+            PathBox = pathBox,
             ModelBox = modelBox,
         };
 
         header.PointerPressed += (_, _) => Select(card);
+        pathBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+                CommitBinaryPath(card);
+        };
+        pathBox.LostFocus += (_, _) => CommitBinaryPath(card);
         modelBox.SelectionChanged += (_, _) =>
         {
             if (_suppressModelEvents)
@@ -385,6 +417,48 @@ public partial class SettingsWindow : Window
     internal ComboBox? ModelBoxFor(string provider)
     {
         return _cards.FirstOrDefault(c => c.Option.Provider == provider)?.ModelBox;
+    }
+
+    internal TextBox? BinaryPathBoxFor(string provider)
+    {
+        return _cards.FirstOrDefault(c => c.Option.Provider == provider)?.PathBox;
+    }
+
+    internal void CommitBinaryPathFor(string provider)
+    {
+        var card = _cards.FirstOrDefault(c => c.Option.Provider == provider);
+        if (card != null)
+            CommitBinaryPath(card);
+    }
+
+    /// <summary>
+    /// Путь к бинарю CLI для карточки: override из app_settings или дефолт из конфигурации.
+    /// </summary>
+    private string EffectiveBinaryPath(EngineOption option)
+    {
+        var stored = _engineManager.GetBinaryPath(option.Provider);
+        return string.IsNullOrWhiteSpace(stored) ? option.BinaryPath : stored;
+    }
+
+    /// <summary>
+    /// Применяет введённый путь к CLI: персистит, пересоздаёт клиента активного движка
+    /// и перепроверяет доступность CLI по новому пути. Пустой ввод откатывается к текущему пути.
+    /// </summary>
+    private void CommitBinaryPath(EngineCard card)
+    {
+        var current = EffectiveBinaryPath(card.Option);
+        var entered = card.PathBox.Text?.Trim() ?? string.Empty;
+        if (entered.Length == 0)
+        {
+            card.PathBox.Text = current;
+            return;
+        }
+
+        if (entered == current)
+            return;
+
+        _engineManager.SetBinaryPath(card.Option.Provider, entered);
+        _ = ProbeAndApplyAsync(card);
     }
 
     internal void SelectProvider(string provider)
@@ -432,18 +506,32 @@ public partial class SettingsWindow : Window
     private async Task RunProbesAsync()
     {
         foreach (var card in _cards)
+            await ProbeAndApplyAsync(card);
+    }
+
+    private async Task ProbeAndApplyAsync(EngineCard card)
+    {
+        ApplyChecking(card);
+        var binaryPath = EffectiveBinaryPath(card.Option);
+        try
         {
-            try
-            {
-                var result = await _probe(card.Option);
-                ApplyProbe(card, result);
-            }
-            catch (Exception exception)
-            {
-                Logger.Warn(exception, "CLI probe failed for '{0}'", card.Option.BinaryPath);
-                ApplyProbe(card, new CliProbeResult(false, string.Empty, card.Option.BinaryPath));
-            }
+            var result = await _probe(card.Option, binaryPath);
+            ApplyProbe(card, result);
         }
+        catch (Exception exception)
+        {
+            Logger.Warn(exception, "CLI probe failed for '{0}'", binaryPath);
+            ApplyProbe(card, new CliProbeResult(false, string.Empty, binaryPath));
+        }
+    }
+
+    private static void ApplyChecking(EngineCard card)
+    {
+        ApplyTag(card.Badge, card.BadgeText, "Checking…", CheckingBrush, "#1F7A818D", "#597A818D");
+        ApplyTag(card.CliTag, card.CliTagText, "Checking…", CheckingBrush, "#1F7A818D", "#597A818D");
+        card.CliDot.Fill = CheckingBrush;
+        card.CliStatusText.Text = "checking…";
+        card.ModelBox.IsEnabled = false;
     }
 
     private void ApplyProbe(EngineCard card, CliProbeResult result)
@@ -465,7 +553,8 @@ public partial class SettingsWindow : Window
             ApplyTag(card.Badge, card.BadgeText, "Not found", NotFoundBrush, "#1FE5534B", "#59E5534B");
             ApplyTag(card.CliTag, card.CliTagText, "Not found", NotFoundBrush, "#1FE5534B", "#59E5534B");
             card.CliDot.Fill = NotFoundBrush;
-            card.CliStatusText.Text = $"not found · looked for: {card.Option.BinaryPath}";
+            var lookedFor = string.IsNullOrWhiteSpace(result.ResolvedPath) ? EffectiveBinaryPath(card.Option) : result.ResolvedPath;
+            card.CliStatusText.Text = $"not found · looked for: {lookedFor}";
             card.ModelBox.IsEnabled = false;
         }
     }
