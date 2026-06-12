@@ -1,0 +1,322 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="SourceLens.Windows.RagWindow"
+        Title="SourceLens · RAG mode"
+        Width="1320"
+        Height="848"
+        MinWidth="980"
+        MinHeight="620"
+        Background="#16181d"
+        RequestedThemeVariant="Dark">
+
+    <Window.Styles>
+        <!-- Section labels: QUESTION / ANSWER / SOURCES / HISTORY -->
+        <Style Selector="TextBlock.section">
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="LetterSpacing" Value="0.7"/>
+            <Setter Property="Foreground" Value="#6b7280"/>
+        </Style>
+
+        <!-- Dark toolbar buttons (Record voice / New dialog) -->
+        <Style Selector="Button.dark">
+            <Setter Property="Background" Value="#1c1f26"/>
+            <Setter Property="Foreground" Value="#cdd3dc"/>
+            <Setter Property="BorderBrush" Value="#2f3441"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style Selector="Button.dark:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#222732"/>
+            <Setter Property="Foreground" Value="#e6e8ec"/>
+        </Style>
+
+        <!-- Accent gradient button (Send) -->
+        <Style Selector="Button.accent">
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="#0b1220"/>
+            <Setter Property="BorderBrush" Value="#5d9bf2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Color="#5d9bf2" Offset="0"/>
+                        <GradientStop Color="#4f7fd6" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style Selector="Button.accent:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#1c2230"/>
+            <Setter Property="Foreground" Value="#4f5662"/>
+            <Setter Property="BorderBrush" Value="#262a33"/>
+        </Style>
+
+        <!-- Small bordered actions (Re-ask, Return to live, Summarize, Show full) -->
+        <Style Selector="Button.chip">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#cdd3dc"/>
+            <Setter Property="BorderBrush" Value="#2f3441"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Padding" Value="11,4"/>
+        </Style>
+        <Style Selector="Button.chip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#222732"/>
+        </Style>
+
+        <!-- History delete cross: hover red -->
+        <Style Selector="Button.histDelete:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#26E5534B"/>
+            <Setter Property="Foreground" Value="#e5534b"/>
+        </Style>
+
+        <!-- Settings (status bar) -->
+        <Style Selector="Button.statusbar:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#23272f"/>
+            <Setter Property="Foreground" Value="#e6e8ec"/>
+        </Style>
+
+        <!-- Dark prompt TextBox -->
+        <Style Selector="TextBox.dark">
+            <Setter Property="Background" Value="#101216"/>
+            <Setter Property="Foreground" Value="#e6e8ec"/>
+            <Setter Property="CaretBrush" Value="#e6e8ec"/>
+            <Setter Property="BorderBrush" Value="#2a2e37"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="Padding" Value="13,11"/>
+        </Style>
+        <Style Selector="TextBox.dark:pointerover /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="#101216"/>
+            <Setter Property="BorderBrush" Value="#2a2e37"/>
+        </Style>
+        <Style Selector="TextBox.dark:focus /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="#101216"/>
+            <Setter Property="BorderBrush" Value="#3a6abf"/>
+        </Style>
+
+        <!-- Recording: pulsing dot -->
+        <Style Selector="Ellipse.pulse">
+            <Style.Animations>
+                <Animation Duration="0:0:1.2" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1.0"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="Opacity" Value="0.3"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="1.0"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- Recording: wave bars -->
+        <Style Selector="Rectangle.wave">
+            <Style.Animations>
+                <Animation Duration="0:0:0.9" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.35"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="Opacity" Value="1.0"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.35"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </Window.Styles>
+
+    <DockPanel>
+
+        <!-- STATUS BAR -->
+        <Border DockPanel.Dock="Top" Height="31" Background="#13151a" BorderBrush="#23262e" BorderThickness="0,0,0,1" Padding="14,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+                    <TextBlock Text="Status:" FontSize="12" Foreground="#6b7280" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="StatusText" Text="Ready" FontSize="12" FontWeight="Medium" Foreground="#c3c8d1" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+                    <Button x:Name="SourcesButton" Classes="statusbar" Content="Sources" Click="SourcesButton_OnClick"
+                            Background="Transparent" Foreground="#9aa1ad" BorderThickness="0"
+                            FontSize="11.5" Padding="9,3" CornerRadius="6" VerticalAlignment="Center"/>
+                    <Button x:Name="SettingsButton" Classes="statusbar" Content="Settings" Click="SettingsButton_OnClick"
+                            Background="Transparent" Foreground="#9aa1ad" BorderThickness="0"
+                            FontSize="11.5" Padding="9,3" CornerRadius="6" VerticalAlignment="Center"/>
+                    <Rectangle Width="1" Height="13" Fill="#2a2e37" Margin="5,0"/>
+                    <TextBlock Text="engine:" FontSize="11" Foreground="#5b626e" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="EngineLabelText" FontSize="11" Foreground="#a9bfe6"
+                               FontFamily="Consolas,Menlo,monospace" VerticalAlignment="Center"/>
+                    <Rectangle Width="1" Height="13" Fill="#2a2e37" Margin="5,0"/>
+                    <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#4ec98a" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- MAIN -->
+        <Grid ColumnDefinitions="296,*">
+
+            <!-- LEFT: HISTORY -->
+            <Border Grid.Column="0" Background="#13151a" BorderBrush="#23262e" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" BorderBrush="#1f2229" BorderThickness="0,0,0,1" Padding="12,12,12,10">
+                        <StackPanel>
+                            <Button x:Name="NewDialogButton" Classes="dark" Height="34" FontSize="13"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    Click="NewDialogButton_OnClick">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <TextBlock Text="+" Foreground="#6aa6ff" FontSize="15" VerticalAlignment="Center"/>
+                                    <TextBlock Text="New dialog" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Grid ColumnDefinitions="Auto,*" Margin="2,11,2,0">
+                                <TextBlock Grid.Column="0" Classes="section" Foreground="#5b626e" Text="HISTORY" VerticalAlignment="Center"/>
+                                <Rectangle Grid.Column="1" Height="1" Fill="#1f2229" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border DockPanel.Dock="Bottom" Background="#101216" BorderBrush="#1f2229" BorderThickness="0,1,0,0" Padding="14,10">
+                        <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto">
+                            <Ellipse Grid.Column="0" Width="6" Height="6" Fill="#6aa6ff" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="1" Text="context:" FontSize="11.5" Foreground="#8b929e" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock x:Name="ContextValueText" Grid.Column="2" Text="0 exchanges" FontSize="11.5" FontWeight="SemiBold" Foreground="#c3c8d1" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="MaxDepthText" Grid.Column="4" Text="max 6" FontSize="10.5" Foreground="#4f5662" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <StackPanel x:Name="HistoryPanel" Margin="8,6,8,10"/>
+                            <TextBlock x:Name="HistoryEmptyText" IsVisible="False" Text="No saved dialogs"
+                                       FontSize="12" Foreground="#454c58" HorizontalAlignment="Center" Margin="12,26"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- RIGHT: WORKBENCH -->
+            <Grid Grid.Column="1" Background="#16181d">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="150" MinHeight="90"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="1.15*" MinHeight="90"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*" MinHeight="90"/>
+                </Grid.RowDefinitions>
+
+                <!-- toolbar -->
+                <Border Grid.Row="0" BorderBrush="#1f2229" BorderThickness="0,0,0,1" Padding="16,12">
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+                        <Button x:Name="RecordButton" Grid.Column="0" Classes="dark" Height="33" Padding="14,0" Click="RecordButton_OnClick">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Ellipse x:Name="RecordDot" Width="10" Height="10" Fill="#7a818d" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="RecordLabel" Text="Record voice" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <StackPanel x:Name="ListeningPanel" Grid.Column="1" IsVisible="False"
+                                    Orientation="Horizontal" Spacing="3" VerticalAlignment="Center" Margin="10,0,0,0">
+                            <Rectangle Classes="wave" Width="3" Height="9" Fill="#e5534b" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                            <Rectangle Classes="wave" Width="3" Height="14" Fill="#e5534b" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                            <Rectangle Classes="wave" Width="3" Height="11" Fill="#e5534b" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                            <Rectangle Classes="wave" Width="3" Height="16" Fill="#e5534b" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                            <TextBlock Text="Listening…" FontSize="11.5" Foreground="#e08a85" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Grid.Column="3" Text="Ctrl / Cmd + Enter" FontSize="11" Foreground="#5b626e"
+                                   FontFamily="Consolas,Menlo,monospace" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <Button x:Name="SendButton" Grid.Column="4" Classes="accent" Height="33" Padding="18,0"
+                                Content="Send →" IsEnabled="False" Click="SendButton_OnClick"/>
+                    </Grid>
+                </Border>
+
+                <!-- view banner -->
+                <Border x:Name="ViewBanner" Grid.Row="1" IsVisible="False" Background="#126AA6FF"
+                        BorderBrush="#296AA6FF" BorderThickness="0,0,0,1" Padding="16,9">
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                        <TextBlock Grid.Column="0" Text="◎" FontSize="11" Foreground="#6aa6ff" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="ViewBannerText" Grid.Column="1" FontSize="12" Foreground="#a9bfe6"
+                                   Margin="11,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <Button x:Name="ReaskButton" Grid.Column="2" Classes="chip" Content="Re-ask"
+                                Margin="0,0,8,0" Click="ReaskButton_OnClick"/>
+                        <Button x:Name="ReturnLiveButton" Grid.Column="3" Classes="chip" Content="Return to live"
+                                Foreground="#6aa6ff" BorderBrush="#4D6AA6FF" Click="ReturnLiveButton_OnClick"/>
+                    </Grid>
+                </Border>
+
+                <!-- QUESTION -->
+                <DockPanel Grid.Row="2" Margin="16,12,16,8">
+                    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,7">
+                        <TextBlock Grid.Column="0" Classes="section" Text="QUESTION" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PromptHintText" Grid.Column="2" Text="editable" FontSize="10.5" Foreground="#4f5662" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBox x:Name="PromptBox" Classes="dark" AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalContentAlignment="Top"
+                             Watermark="Ask a question about your indexed PDFs…"/>
+                </DockPanel>
+
+                <GridSplitter Grid.Row="3" Height="7" HorizontalAlignment="Stretch" ResizeDirection="Rows" Background="Transparent"/>
+                <Rectangle Grid.Row="3" Width="34" Height="3" RadiusX="2" RadiusY="2" Fill="#2c313b"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
+
+                <!-- ANSWER -->
+                <DockPanel Grid.Row="4" Margin="16,6,16,8">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,7">
+                        <TextBlock Classes="section" Text="ANSWER" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="AnswerStatusText" Text="" FontSize="11" Foreground="#6aa6ff" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Border Background="#101216" BorderBrush="#23262e" BorderThickness="1" CornerRadius="7">
+                        <Panel>
+                            <TextBlock x:Name="AnswerPlaceholder"
+                                       Text="Ask a question, or pick one from the history on the left."
+                                       Foreground="#454c58" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20,0"/>
+                            <ScrollViewer x:Name="AnswerScroll" Padding="16,14" HorizontalScrollBarVisibility="Disabled">
+                                <SelectableTextBlock x:Name="AnswerBlock" IsVisible="False" FontSize="13.5" LineHeight="22"
+                                                     Foreground="#d3d8e0" TextWrapping="Wrap" SelectionBrush="#3A6AA6FF"/>
+                            </ScrollViewer>
+                        </Panel>
+                    </Border>
+                </DockPanel>
+
+                <GridSplitter Grid.Row="5" Height="7" HorizontalAlignment="Stretch" ResizeDirection="Rows" Background="Transparent"/>
+                <Rectangle Grid.Row="5" Width="34" Height="3" RadiusX="2" RadiusY="2" Fill="#2c313b"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
+
+                <!-- SOURCES -->
+                <DockPanel Grid.Row="6" Margin="16,6,16,14">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+                        <TextBlock Classes="section" Text="SOURCES" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SourcesCountText" Text="none yet" FontSize="11" Foreground="#5b626e" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Panel>
+                        <Grid x:Name="SourcesEmptyPanel" MinHeight="80">
+                            <Rectangle Stroke="#23262e" StrokeThickness="1" StrokeDashArray="4,4" RadiusX="7" RadiusY="7" Fill="Transparent"/>
+                            <TextBlock Text="Retrieved passages will appear here" Foreground="#454c58" FontSize="12.5"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ScrollViewer x:Name="SourcesScroll" IsVisible="False" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="SourcesPanel" Spacing="8"/>
+                        </ScrollViewer>
+                    </Panel>
+                </DockPanel>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>

@@ -1,0 +1,63 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="SourceLens.Windows.SettingsWindow"
+        Title="Settings"
+        Width="560"
+        SizeToContent="Height"
+        CanResize="False"
+        Background="#1a1d23"
+        RequestedThemeVariant="Dark"
+        WindowStartupLocation="CenterOwner">
+
+    <Window.Styles>
+        <!-- Accent gradient button (Done) -->
+        <Style Selector="Button.accent">
+            <Setter Property="Foreground" Value="#0b1220"/>
+            <Setter Property="BorderBrush" Value="#5d9bf2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Color="#5d9bf2" Offset="0"/>
+                        <GradientStop Color="#4f7fd6" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style Selector="ComboBox.dark">
+            <Setter Property="Background" Value="#101216"/>
+            <Setter Property="Foreground" Value="#e6e8ec"/>
+            <Setter Property="BorderBrush" Value="#2a2e37"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Padding" Value="11,7"/>
+        </Style>
+    </Window.Styles>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Padding="18,16" BorderBrush="#23262e" BorderThickness="0,0,0,1">
+            <TextBlock Text="Settings" FontSize="14" FontWeight="Bold" Foreground="#e6e8ec"/>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Padding="18,14" BorderBrush="#23262e" BorderThickness="0,1,0,0">
+            <Button x:Name="DoneButton" Classes="accent" Content="Done" Padding="20,8"
+                    HorizontalAlignment="Right" Click="DoneButton_OnClick"/>
+        </Border>
+
+        <StackPanel Margin="18">
+            <TextBlock Text="ANSWER ENGINE" FontSize="10.5" FontWeight="Bold" LetterSpacing="0.7"
+                       Foreground="#6b7280" Margin="0,0,0,3"/>
+            <TextBlock Text="Choose which CLI agent answers your questions." FontSize="11.5"
+                       Foreground="#6b7280" Margin="0,0,0,12"/>
+            <StackPanel x:Name="CardsPanel" Spacing="9"/>
+        </StackPanel>
+    </DockPanel>
+</Window>

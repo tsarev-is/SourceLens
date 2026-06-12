@@ -9,6 +9,8 @@
         <ApplicationManifest>app.manifest</ApplicationManifest>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
         <AssemblyVersion>1.0.0</AssemblyVersion>
+        <!-- AVLN3001: окна конструируются с зависимостями (composition root), parameterless-ctor для runtime-XAML-loader не нужен. -->
+        <NoWarn>$(NoWarn);AVLN3001</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
@@ -25,8 +27,17 @@
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\SourceLens.Domain\SourceLens.Domain.csproj" />
+      <ProjectReference Include="..\SourceLens.Integrations\SourceLens.Integrations.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
       <None Remove="NLog.config" />
       <Content Include="NLog.config">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <None Remove="appsettings.template.json" />
+      <Content Include="appsettings.template.json">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
     </ItemGroup>
@@ -36,9 +47,25 @@
         <DependentUpon>MainWindow.axaml</DependentUpon>
         <SubType>Code</SubType>
       </Compile>
+      <Compile Update="Windows\RagWindow.axaml.cs">
+        <DependentUpon>RagWindow.axaml</DependentUpon>
+        <SubType>Code</SubType>
+      </Compile>
+      <Compile Update="Windows\SourceLibraryWindow.axaml.cs">
+        <DependentUpon>SourceLibraryWindow.axaml</DependentUpon>
+        <SubType>Code</SubType>
+      </Compile>
+      <Compile Update="Windows\SettingsWindow.axaml.cs">
+        <DependentUpon>SettingsWindow.axaml</DependentUpon>
+        <SubType>Code</SubType>
+      </Compile>
       <Compile Update="Windows\App.axaml.cs">
         <DependentUpon>App.axaml</DependentUpon>
         <SubType>Code</SubType>
       </Compile>
+    </ItemGroup>
+
+    <ItemGroup>
+      <InternalsVisibleTo Include="SourceLens.Tests" />
     </ItemGroup>
 </Project>

@@ -1,20 +1,16 @@
 using Avalonia.Controls;
-using Avalonia.Interactivity;
 
 namespace SourceLens.Windows;
 
+/// <summary>
+/// Окно ошибок конфигурации: показывается вместо RagWindow, если composition root
+/// не смог прочитать/провалидировать appsettings.json или собрать зависимости.
+/// </summary>
 public partial class MainWindow : Window
 {
-    private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
-
-    public MainWindow()
+    public MainWindow(string errorMessage)
     {
         InitializeComponent();
-    }
-
-    private void ButtonRequest_OnClick(object? sender, RoutedEventArgs e)
-    {
-        Logger.Info("Request button clicked");
-        AnswerTextBox.Text = "Заглушка: здесь будет ответ на запрос.";
+        ErrorTextBox.Text = errorMessage;
     }
 }

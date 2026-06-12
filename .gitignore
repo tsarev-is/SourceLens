@@ -131,3 +131,11 @@ $RECYCLE.BIN/
 .DS_Store
 
 _NCrunch*
+
+# =========================
+# SourceLens specifics
+# =========================
+sourcelens.db
+logs/
+models/
+books/
