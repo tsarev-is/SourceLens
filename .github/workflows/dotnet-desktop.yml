@@ -1,6 +1,6 @@
 # Builds, tests and publishes SourceLens for Windows (x64) and Linux (x64).
 # Runs ONLY on pushes to main; nothing happens on other branches or PRs.
-# Each run creates a GitHub Release v1.1.<run_number> with self-contained archives.
+# Each run creates a GitHub Release v<VersionPrefix> (taken from SourceLens.csproj) with self-contained archives.
 
 name: Build & Release
 
@@ -29,8 +29,8 @@ jobs:
 
       - name: Resolve version
         run: |
-          PREFIX=$(dotnet msbuild src/SourceLens/SourceLens.csproj -getProperty:VersionPrefix)
-          echo "VERSION=${PREFIX}.${{ github.run_number }}" >> "$GITHUB_ENV"
+          VERSION=$(dotnet msbuild src/SourceLens/SourceLens.csproj -getProperty:VersionPrefix)
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Test
         run: dotnet test src/SourceLens.Tests/SourceLens.Tests.csproj -c Release

@@ -1,12 +1,13 @@
 # SourceLens
 
-**Chat with your own books and documents.** A free desktop app (Windows/Linux) that builds a
+**Chat with your own books and documents.** A free desktop app (Windows/Linux, and macOS via a
+manual build) that builds a
 personal library from your PDF, EPUB and text files and answers questions about them in plain
 language — typed or by voice. Every answer is backed by quotes from your documents, so you always
 see where the information came from. Made for students, researchers and anyone with a lot to read.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-blue)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20(build)-blue)
 ![.NET](https://img.shields.io/badge/.NET-9.0-512BD4?logo=dotnet&logoColor=white)
 ![UI: Avalonia](https://img.shields.io/badge/UI-Avalonia%2011-883889)
 ![Runs locally](https://img.shields.io/badge/your%20documents-stay%20on%20your%20PC-4ec98a)
@@ -34,6 +35,8 @@ see where the information came from. Made for students, researchers and anyone w
    else to install:
    - **Windows:** `SourceLens-…-win-x64.zip` → run `SourceLens.exe`.
    - **Linux:** `SourceLens-…-linux-x64.tar.gz` → run `./SourceLens`.
+   - **macOS:** no prebuilt release — build it yourself from source (see
+     [For developers](#for-developers); it's one `dotnet publish` command).
 2. **Install an AI assistant.** SourceLens runs one you already use via your existing sign-in — it
    never asks for or stores API keys. Set up at least one:
    - **Claude Code** (`claude`) — [setup](https://docs.anthropic.com/en/docs/claude-code/setup)
@@ -67,6 +70,16 @@ dotnet test src/SourceLens.Tests/SourceLens.Tests.csproj --filter "FullyQualifie
 Releases are built automatically by GitHub Actions on every push to `main`
 (`.github/workflows/dotnet-desktop.yml`): tests, then self-contained `win-x64`/`linux-x64` publishes
 attached to a GitHub Release.
+
+**macOS** is supported but has no prebuilt release — build it yourself from source with a self-contained
+publish for the right runtime identifier (`osx-x64` for Intel, `osx-arm64` for Apple Silicon):
+
+```bash
+dotnet publish src/SourceLens/SourceLens.csproj -c Release -r osx-arm64 --self-contained
+```
+
+The published app appears under `src/SourceLens/bin/Release/net9.0/osx-arm64/publish/`. ffmpeg is needed
+for voice input (`brew install ffmpeg`).
 
 ### How it works
 
