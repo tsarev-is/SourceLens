@@ -56,7 +56,8 @@ public partial class SourceLibraryWindow : Window
         Button Remove,
         ProgressBar? Progress,
         TextBlock? Percent,
-        Button? Members);
+        Button? Members,
+        Button? Search);
 
     /// <summary>
     /// Контролы строки коллекции в сайдбаре — шов для headless-тестов.
@@ -64,6 +65,8 @@ public partial class SourceLibraryWindow : Window
     internal sealed record CollectionHandles(int? CollectionId, string Name, int Count, Border Row, Button? Delete);
 
     private readonly SourceLibraryManager _manager;
+    // Колбэк «Search only this source»: ограничить область поиска одним документом (передаётся из RagWindow).
+    private readonly Action<int>? _searchOnlySource;
     private readonly List<CardHandles> _cards = new();
     private readonly List<CollectionHandles> _collectionRows = new();
 
@@ -71,9 +74,10 @@ public partial class SourceLibraryWindow : Window
     private int? _selectedCollectionId;
     private BookCollectionSummary[] _collections = Array.Empty<BookCollectionSummary>();
 
-    public SourceLibraryWindow(SourceLibraryManager manager)
+    public SourceLibraryWindow(SourceLibraryManager manager, Action<int>? searchOnlySource = null)
     {
         _manager = manager;
+        _searchOnlySource = searchOnlySource;
 
         InitializeComponent();
 
@@ -512,15 +516,47 @@ public partial class SourceLibraryWindow : Window
                 Logger.Warn(ex, "Remove source failed");
             }
         };
-        Grid.SetColumn(remove, 3);
+        Grid.SetColumn(remove, 4);
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
+        // «Search only this source» — ограничить область поиска этим документом и закрыть библиотеку.
+        Button? searchOnly = null;
+        if (_searchOnlySource != null && !entry.Indexing && entry.DocumentId is { } searchDocId)
+        {
+            searchOnly = new Button
+            {
+                Content = "⌕",
+                FontSize = 14,
+                Width = 20,
+                Height = 20,
+                Padding = new Thickness(0),
+                Margin = new Thickness(8, 1, 0, 0),
+                Background = Brushes.Transparent,
+                Foreground = MutedBrush,
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(5),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            searchOnly.Classes.Add("cardSearch");
+            ToolTip.SetTip(searchOnly, "Search only this source");
+            searchOnly.Click += (_, _) =>
+            {
+                _searchOnlySource(searchDocId);
+                Close();
+            };
+            Grid.SetColumn(searchOnly, 3);
+        }
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto") };
         grid.Children.Add(icon);
         grid.Children.Add(texts);
         grid.Children.Add(pillBorder);
+        if (searchOnly != null)
+            grid.Children.Add(searchOnly);
         grid.Children.Add(remove);
 
-        _cards.Add(new CardHandles(entry, meta, pill, remove, progressBar, percentText, membersButton));
+        _cards.Add(new CardHandles(entry, meta, pill, remove, progressBar, percentText, membersButton, searchOnly));
 
         return new Border
         {

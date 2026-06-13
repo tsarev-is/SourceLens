@@ -533,6 +533,115 @@ public class RagDialogManagerTests
                 "scope-настройка удалённой сессии не должна копиться в app_settings");
     }
 
+    [Test]
+    public async Task SetDocumentScope_ResolvesToSelectedDocuments_AndIsPassedToRetriever()
+    {
+        var docIds = SeedDocuments(3);
+        var selected = new[] { docIds[0], docIds[2] };
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "hit", Score = 0.9f } };
+        var manager = CreateManager();
+
+        manager.SetDocumentScope(selected);
+        Assert.That(manager.CurrentScope.Kind, Is.EqualTo(ScopeKind.Documents));
+        Assert.That(manager.CurrentScope.DocumentIds, Is.EquivalentTo(selected));
+        Assert.That(manager.CurrentScopeCollectionId, Is.Null, "набор документов — не коллекция");
+
+        await manager.Ask("a sufficiently long question");
+
+        Assert.That(_retriever.Scopes.Single()!.DocumentIds, Is.EquivalentTo(selected));
+    }
+
+    [Test]
+    public void SetDocumentScope_PersistsAndRestoresEncoding()
+    {
+        var docIds = SeedDocuments(2);
+        var manager = CreateManager();
+        var sessionId = manager.CurrentSession.Id;
+
+        manager.SetDocumentScope(docIds);
+
+        using (var ctx = Global.CreateContext(_builder))
+            Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.EqualTo("d:" + string.Join(",", docIds)));
+
+        // Новый менеджер (без кэша в памяти) восстанавливает набор документов из app_settings.
+        var restored = CreateManager();
+        Assert.That(restored.CurrentScope.Kind, Is.EqualTo(ScopeKind.Documents));
+        Assert.That(restored.CurrentScope.DocumentIds, Is.EquivalentTo(docIds));
+    }
+
+    [Test]
+    public void GetScope_LegacyBareInteger_IsTreatedAsCollection()
+    {
+        var manager = CreateManager();
+        var sessionId = manager.CurrentSession.Id;
+        // Старый формат scope — голый id коллекции — должен читаться как коллекция (бэк-совместимость).
+        using (var ctx = Global.CreateContext(_builder))
+        {
+            ctx.SetSetting("rag.scope." + sessionId, "42");
+            ctx.SaveChanges();
+        }
+
+        var restored = CreateManager();
+        Assert.That(restored.CurrentScope.Kind, Is.EqualTo(ScopeKind.Collection));
+        Assert.That(restored.CurrentScopeCollectionId, Is.EqualTo(42));
+    }
+
+    [Test]
+    public async Task Ask_DocumentScope_SnapshotsTitleForSingleAndCountForMany()
+    {
+        var docIds = SeedDocuments(2);
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "hit", Score = 0.9f } };
+        var manager = CreateManager();
+
+        manager.SetDocumentScope(new[] { docIds[0] });
+        await manager.Ask("a sufficiently long question");
+        var single = manager.GetExchanges(manager.CurrentSession.Id).Last();
+        Assert.That(single.ScopeName, Is.EqualTo("doc 0"));
+
+        manager.SetDocumentScope(docIds);
+        await manager.Ask("another sufficiently long question");
+        var many = manager.GetExchanges(manager.CurrentSession.Id).Last();
+        Assert.That(many.ScopeName, Is.EqualTo("2 sources"));
+    }
+
+    [Test]
+    public async Task Ask_DocumentScope_DropsVanishedDocuments_AndRepairsPersist()
+    {
+        var docIds = SeedDocuments(2);
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "hit", Score = 0.9f } };
+        var manager = CreateManager();
+        var sessionId = manager.CurrentSession.Id;
+        manager.SetDocumentScope(docIds);
+
+        // Один документ исчезает из библиотеки — область должна сжаться до оставшегося.
+        using (var ctx = Global.CreateContext(_builder))
+            await ctx.DeleteBookDocument(docIds[1]);
+
+        await manager.Ask("a sufficiently long question");
+
+        Assert.That(_retriever.Scopes.Single()!.DocumentIds, Is.EquivalentTo(new[] { docIds[0] }));
+        using (var ctx = Global.CreateContext(_builder))
+            Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.EqualTo("d:" + docIds[0]));
+    }
+
+    /// <summary>
+    /// Создаёт N проиндексированных документов вне коллекций; возвращает их id.
+    /// </summary>
+    private int[] SeedDocuments(int count)
+    {
+        using var ctx = Global.CreateContext(_builder);
+        var docIds = new int[count];
+        for (var i = 0; i < count; i++)
+        {
+            var doc = ctx.Set<BookDocumentItem>().Add(
+                BookDocumentItem.Create($"doc {i}", $"/books/doc-{i}.pdf", $"sha-doc-{i}", "v1", "fake-v1", 4, 10)).Entity;
+            ctx.SaveChanges();
+            docIds[i] = doc.Id;
+        }
+
+        return docIds;
+    }
+
     /// <summary>
     /// Создаёт пользовательскую коллекцию с N книгами-членами; возвращает id коллекции и книг.
     /// </summary>

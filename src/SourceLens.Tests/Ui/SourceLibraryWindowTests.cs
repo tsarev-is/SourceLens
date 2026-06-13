@@ -80,6 +80,49 @@ public class SourceLibraryWindowTests
     }
 
     [AvaloniaTest]
+    public void SearchOnlyThisSource_InvokesCallbackWithDocumentId_AndCloses()
+    {
+        int documentId;
+        using (var ctx = GetContext())
+        {
+            var doc = BookDocumentItem.Create("IR Book", "/books/ir-book.pdf", "sha1", "v1", "fake-v1", 4, 5);
+            ctx.Set<BookDocumentItem>().Add(doc);
+            ctx.SaveChanges();
+            documentId = doc.Id;
+        }
+
+        int? requested = null;
+        var window = new SourceLibraryWindow(BuildManager(), id => requested = id);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var search = window.Cards.Single().Search;
+        Assert.That(search, Is.Not.Null, "у проиндексированной карточки есть кнопка «Search only this source»");
+
+        search!.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(requested, Is.EqualTo(documentId));
+    }
+
+    [AvaloniaTest]
+    public void SearchOnlyThisSource_AbsentWhenNoCallback()
+    {
+        using (var ctx = GetContext())
+        {
+            ctx.Set<BookDocumentItem>().Add(
+                BookDocumentItem.Create("IR Book", "/books/ir-book.pdf", "sha1", "v1", "fake-v1", 4, 5));
+            ctx.SaveChanges();
+        }
+
+        var window = new SourceLibraryWindow(BuildManager());
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(window.Cards.Single().Search, Is.Null);
+    }
+
+    [AvaloniaTest]
     public async Task RemoveDocument_UpdatesListAndDb()
     {
         int documentId;

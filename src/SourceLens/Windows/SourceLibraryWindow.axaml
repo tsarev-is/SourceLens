@@ -56,6 +56,11 @@
             <Setter Property="Background" Value="#26E5534B"/>
             <Setter Property="Foreground" Value="#e5534b"/>
         </Style>
+        <!-- Search only this source: hover blue -->
+        <Style Selector="Button.cardSearch:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#1F6AA6FF"/>
+            <Setter Property="Foreground" Value="#6aa6ff"/>
+        </Style>
 
         <!-- Collection sidebar row hover -->
         <Style Selector="Border.collectionRow:pointerover">

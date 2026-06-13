@@ -22,10 +22,12 @@ public class RagDialogManager
     private readonly IKnowledgeRetriever _retriever;
     private readonly RetrievalOptions _retrievalOptions;
 
-    // Область поиска сессии — id коллекции (null — «All sources», вся библиотека). Кэш + персист в app_settings.
-    private readonly Dictionary<int, int?> _scopeCollectionBySession = new();
+    // Область поиска сессии — вся библиотека / коллекция / явный набор документов. Кэш + персист в app_settings.
+    private readonly Dictionary<int, SessionScope> _scopeBySession = new();
 
     private const string ScopeSettingPrefix = "rag.scope.";
+    // Префикс кодировки набора документов в app_settings; голый int — коллекция (бэк-совместимость), пусто — All.
+    private const string DocumentScopePrefix = "d:";
 
     public RagDialogManager(Func<SourceLensContext> getContext, Func<AbstractLlmInferences> getLlm,
         IKnowledgeRetriever retriever, RetrievalOptions retrievalOptions, RagDialogOptions options)
@@ -245,61 +247,147 @@ public class RagDialogManager
         return ctx.GetRagExchanges(sessionId).LastOrDefault()?.Question;
     }
 
-    // ---------- Область поиска (per-session, по коллекции) ----------
+    // ---------- Область поиска (per-session: вся библиотека / коллекция / набор документов) ----------
+
+    // Цвет таблетки для области из конкретных документов (у неё нет цвета коллекции) — акцент мокапа.
+    private const string DocumentScopeColor = "#6aa6ff";
 
     /// <summary>
-    /// Id коллекции области поиска текущей сессии (null — «All sources», вся библиотека).
+    /// Область поиска текущей сессии.
     /// </summary>
-    public int? CurrentScopeCollectionId => GetScopeCollectionId(CurrentSession.Id);
+    public SessionScope CurrentScope => GetScope(CurrentSession.Id);
+
+    /// <summary>
+    /// Id коллекции области поиска текущей сессии (null — не коллекция: вся библиотека или набор документов).
+    /// </summary>
+    public int? CurrentScopeCollectionId =>
+        CurrentScope is { Kind: ScopeKind.Collection, CollectionId: { } id } ? id : null;
 
     /// <summary>
     /// Задаёт область поиска текущей сессии коллекцией (null — вся библиотека) и сохраняет её.
     /// </summary>
     public void SetCollectionScope(int? collectionId)
     {
-        var sessionId = CurrentSession.Id;
-        _scopeCollectionBySession[sessionId] = collectionId;
-
-        using var ctx = _getContext();
-        ctx.SetSetting(ScopeSettingPrefix + sessionId, collectionId?.ToString() ?? string.Empty);
-        ctx.SaveChanges();
-    }
-
-    private int? GetScopeCollectionId(int sessionId)
-    {
-        if (_scopeCollectionBySession.TryGetValue(sessionId, out var cached))
-            return cached;
-
-        using var ctx = _getContext();
-        // Значение — id коллекции; пусто или нераспознанное (в т.ч. легаси-список книг) — вся библиотека.
-        var raw = ctx.GetSetting(ScopeSettingPrefix + sessionId);
-        var id = int.TryParse(raw, out var parsed) ? parsed : (int?)null;
-        _scopeCollectionBySession[sessionId] = id;
-        return id;
+        SetScope(collectionId.HasValue ? SessionScope.Collection(collectionId.Value) : SessionScope.All);
     }
 
     /// <summary>
-    /// Резолвит коллекцию области поиска в книги + снимок её имени/цвета для персиста.
+    /// Задаёт область поиска текущей сессии явным набором документов (пустой — вся библиотека) и сохраняет её.
+    /// </summary>
+    public void SetDocumentScope(IReadOnlyList<int> documentIds)
+    {
+        SetScope(documentIds.Count > 0
+            ? SessionScope.Documents(documentIds.Distinct().ToArray())
+            : SessionScope.All);
+    }
+
+    private void SetScope(SessionScope scope)
+    {
+        var sessionId = CurrentSession.Id;
+        _scopeBySession[sessionId] = scope;
+
+        using var ctx = _getContext();
+        ctx.SetSetting(ScopeSettingPrefix + sessionId, EncodeScope(scope));
+        ctx.SaveChanges();
+    }
+
+    private SessionScope GetScope(int sessionId)
+    {
+        if (_scopeBySession.TryGetValue(sessionId, out var cached))
+            return cached;
+
+        using var ctx = _getContext();
+        var scope = DecodeScope(ctx.GetSetting(ScopeSettingPrefix + sessionId));
+        _scopeBySession[sessionId] = scope;
+        return scope;
+    }
+
+    // Пусто — All; «d:1,2,3» — набор документов; голый int — коллекция (бэк-совместимость со старым форматом).
+    private static string EncodeScope(SessionScope scope) => scope.Kind switch
+    {
+        ScopeKind.Collection => scope.CollectionId!.Value.ToString(),
+        ScopeKind.Documents => DocumentScopePrefix + string.Join(",", scope.DocumentIds),
+        _ => string.Empty,
+    };
+
+    private static SessionScope DecodeScope(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return SessionScope.All;
+
+        if (raw.StartsWith(DocumentScopePrefix, StringComparison.Ordinal))
+        {
+            var ids = raw[DocumentScopePrefix.Length..]
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(s => int.TryParse(s, out var v) ? v : (int?)null)
+                .Where(v => v.HasValue)
+                .Select(v => v!.Value)
+                .ToArray();
+            return ids.Length > 0 ? SessionScope.Documents(ids) : SessionScope.All;
+        }
+
+        // Голый int — id коллекции; нераспознанное (легаси) — вся библиотека.
+        return int.TryParse(raw, out var collectionId) ? SessionScope.Collection(collectionId) : SessionScope.All;
+    }
+
+    /// <summary>
+    /// Резолвит область поиска в книги + снимок имени/цвета для персиста обмена.
+    /// Исчезнувшие коллекция/документы вычищаются, область сбрасывается на доступное подмножество (или All).
     /// </summary>
     private ResolvedScope ResolveScope(int sessionId)
     {
-        var collectionId = GetScopeCollectionId(sessionId);
-        if (collectionId == null)
-            return new ResolvedScope(RetrievalScope.WholeLibrary, false, null, null);
+        var scope = GetScope(sessionId);
+        return scope.Kind switch
+        {
+            ScopeKind.Collection => ResolveCollectionScope(sessionId, scope.CollectionId!.Value),
+            ScopeKind.Documents => ResolveDocumentScope(sessionId, scope.DocumentIds),
+            _ => new ResolvedScope(RetrievalScope.WholeLibrary, false, null, null),
+        };
+    }
 
+    private ResolvedScope ResolveCollectionScope(int sessionId, int collectionId)
+    {
         using var ctx = _getContext();
-        var collection = ctx.FindCollection(collectionId.Value);
+        var collection = ctx.FindCollection(collectionId);
         if (collection == null)
         {
             // Коллекция удалена — область сбрасывается на всю библиотеку.
-            _scopeCollectionBySession[sessionId] = null;
+            _scopeBySession[sessionId] = SessionScope.All;
+            ctx.SetSetting(ScopeSettingPrefix + sessionId, string.Empty);
+            ctx.SaveChanges();
             return new ResolvedScope(RetrievalScope.WholeLibrary, false, null, null);
         }
 
-        var documentIds = ctx.GetCollectionDocumentIds(collectionId.Value);
+        var documentIds = ctx.GetCollectionDocumentIds(collectionId);
         return documentIds.Length == 0
             ? new ResolvedScope(RetrievalScope.WholeLibrary, true, collection.Name, collection.Color)
             : new ResolvedScope(RetrievalScope.ForDocuments(documentIds), false, collection.Name, collection.Color);
+    }
+
+    private ResolvedScope ResolveDocumentScope(int sessionId, IReadOnlyList<int> requested)
+    {
+        using var ctx = _getContext();
+        var documents = ctx.GetBookDocuments();
+        var byId = documents.ToDictionary(d => d.Id, d => d.Title);
+
+        // Оставляем только реально существующие проиндексированные документы (исчезнувшие выбрасываем).
+        var live = requested.Where(byId.ContainsKey).Distinct().ToArray();
+        if (live.Length != requested.Count)
+        {
+            // Набор изменился — чиним персист, чтобы исчезнувшие id не копились.
+            var repaired = live.Length > 0 ? SessionScope.Documents(live) : SessionScope.All;
+            _scopeBySession[sessionId] = repaired;
+            ctx.SetSetting(ScopeSettingPrefix + sessionId, EncodeScope(repaired));
+            ctx.SaveChanges();
+        }
+
+        if (live.Length == 0)
+            // Все выбранные источники исчезли — честный «нет источников» (ретрив не запускаем), как пустая коллекция.
+            return new ResolvedScope(RetrievalScope.WholeLibrary, true, null, DocumentScopeColor);
+
+        // Снимок: один документ — его заголовок; иначе «N sources».
+        var name = live.Length == 1 ? byId[live[0]] : $"{live.Length} sources";
+        return new ResolvedScope(RetrievalScope.ForDocuments(live), false, name, DocumentScopeColor);
     }
 
     private readonly record struct ResolvedScope(RetrievalScope Scope, bool EmptyCollection, string? Name, string? Color);
@@ -313,7 +401,7 @@ public class RagDialogManager
         session.MarkDeleted();
         // Область поиска привязана к сессии — удаляем её настройку, чтобы ключи rag.scope.* не копились.
         ctx.DeleteSetting(ScopeSettingPrefix + sessionId);
-        _scopeCollectionBySession.Remove(sessionId);
+        _scopeBySession.Remove(sessionId);
         await ctx.SaveChangesAsync();
 
         if (CurrentSession.Id == sessionId)

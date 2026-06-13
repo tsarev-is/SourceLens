@@ -239,6 +239,7 @@ public class SqliteKnowledgeRetriever : IKnowledgeRetriever, IDisposable
         var meta = texts.TryGetValue(group.MemberIds[0], out var first) ? first : null;
         return new KnowledgeChunk
         {
+            DocumentId = group.DocumentId,
             Text = string.Join(" ", parts),
             SourceTitle = meta?.Title ?? string.Empty,
             SourceLocation = meta?.SourceLocation ?? string.Empty,

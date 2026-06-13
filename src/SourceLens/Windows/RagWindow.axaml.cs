@@ -17,6 +17,7 @@ using Avalonia.Threading;
 using SourceLens.Configuration;
 using SourceLens.Domain;
 using SourceLens.Domain.Audio;
+using SourceLens.Domain.Entities;
 using SourceLens.Domain.Entities.Models;
 using SourceLens.Domain.Rag.Models;
 using SourceLens.Integrations;
@@ -71,6 +72,12 @@ public partial class RagWindow : Window
     private KnowledgeChunk[] _liveSources = Array.Empty<KnowledgeChunk>();
     private CancellationTokenSource? _summaryCts;
     private readonly Dictionary<string, string> _summaryCache = new();
+
+    // Состояние scope-меню: текст фильтра и развёрнутые коллекции (для вложенного выбора документов).
+    private string _scopeFilter = string.Empty;
+    private readonly HashSet<int> _expandedScopeCollections = new();
+    // Бейдж коллекции на карточку источника по DocumentId — пересобирается при рендере источников.
+    private Dictionary<int, (string Name, string Color)> _sourceBadges = new();
 
     public RagWindow(
         AnswerEngineManager engineManager,
@@ -168,13 +175,13 @@ public partial class RagWindow : Window
         AnswerStatusText.Text = string.Empty;
     }
 
-    // ---------- Область поиска (выбор коллекции) ----------
+    // ---------- Область поиска (All sources / коллекция / конкретные документы) ----------
 
     private static readonly IBrush DefaultScopeSquareBrush = Brush.Parse("#7a818d");
 
     /// <summary>
-    /// Перестраивает «таблетку» области поиска и её меню из коллекций библиотеки и восстанавливает
-    /// scope сессии. Удалённая коллекция в сохранённом scope сбрасывается на всю библиотеку (в ResolveScope).
+    /// Перестраивает «таблетку» области поиска и её меню (фильтр + коллекции с разворотом и чекбоксами
+    /// документов) из библиотеки. Удалённая коллекция в сохранённом scope сбрасывается на всю библиотеку.
     /// </summary>
     internal void RefreshScopeSelector()
     {
@@ -182,48 +189,85 @@ public partial class RagWindow : Window
             return;
 
         var collections = _libraryManager.GetCollections();
-        var totalDocs = _libraryManager.GetEntries().Count(e => e.DocumentId.HasValue);
-        var activeId = _dialogManager.CurrentScopeCollectionId;
-        var active = activeId.HasValue ? collections.FirstOrDefault(c => c.Id == activeId.Value) : null;
+        var entries = _libraryManager.GetEntries()
+            .Where(e => e.DocumentId.HasValue)
+            .ToArray();
+        var totalDocs = entries.Length;
+        var scope = _dialogManager.CurrentScope;
 
         // Активная коллекция исчезла (удалена) — сбрасываем scope на всю библиотеку.
-        if (activeId.HasValue && active == null)
+        if (scope is { Kind: ScopeKind.Collection, CollectionId: { } cid } && collections.All(c => c.Id != cid))
         {
             _dialogManager.SetCollectionScope(null);
-            activeId = null;
+            scope = _dialogManager.CurrentScope;
         }
 
-        // Шапка таблетки.
-        if (active == null)
-        {
-            ScopeSquare.IsVisible = false;
-            ScopeLabelText.Text = "All sources";
-            ScopeCountText.Text = totalDocs > 0 ? DocsLabel(totalDocs) : string.Empty;
-        }
-        else
-        {
-            ScopeSquare.IsVisible = true;
-            ScopeSquare.Background = Brush.Parse(active.Color);
-            ScopeLabelText.Text = Truncate(active.Name, 28);
-            ScopeCountText.Text = DocsLabel(active.Count);
-        }
+        // Выбранные документы, реально существующие в библиотеке (для таблетки и чекбоксов).
+        var existingIds = entries.Select(e => e.DocumentId!.Value).ToHashSet();
+        var selectedDocs = scope.Kind == ScopeKind.Documents
+            ? scope.DocumentIds.Where(existingIds.Contains).ToHashSet()
+            : new HashSet<int>();
 
-        // Меню: заголовок, «All sources», коллекции, «Manage collections in library».
+        RefreshScopePill(scope, collections, totalDocs, selectedDocs);
+        RefreshScopeMenu(collections, entries, scope, selectedDocs);
+    }
+
+    private void RefreshScopePill(SessionScope scope, BookCollectionSummary[] collections, int totalDocs,
+        IReadOnlyCollection<int> selectedDocs)
+    {
+        switch (scope.Kind)
+        {
+            case ScopeKind.Collection when collections.FirstOrDefault(c => c.Id == scope.CollectionId) is { } active:
+                ScopeSquare.IsVisible = true;
+                ScopeSquare.Background = Brush.Parse(active.Color);
+                ScopeLabelText.Text = Truncate(active.Name, 28);
+                ScopeCountText.Text = DocsLabel(active.Count);
+                break;
+            case ScopeKind.Documents when selectedDocs.Count > 0:
+                // У набора документов нет цвета коллекции — синий индикатор (мокап: blue when scoped to docs).
+                ScopeSquare.IsVisible = true;
+                ScopeSquare.Background = AccentBrush;
+                ScopeLabelText.Text = SourcesLabel(selectedDocs.Count);
+                ScopeCountText.Text = string.Empty;
+                break;
+            default:
+                ScopeSquare.IsVisible = false;
+                ScopeLabelText.Text = "All sources";
+                ScopeCountText.Text = totalDocs > 0 ? DocsLabel(totalDocs) : string.Empty;
+                break;
+        }
+    }
+
+    private void RefreshScopeMenu(BookCollectionSummary[] collections, SourceLibraryEntry[] entries,
+        SessionScope scope, HashSet<int> selectedDocs)
+    {
         ScopeMenuPanel.Children.Clear();
-        ScopeMenuPanel.Children.Add(new TextBlock
-        {
-            Text = "Search in collection",
-            FontSize = 9.5,
-            FontWeight = FontWeight.Bold,
-            LetterSpacing = 0.6,
-            Foreground = RowMutedBrush,
-            Margin = new Thickness(8, 6, 8, 5),
-        });
 
-        ScopeMenuPanel.Children.Add(BuildScopeRow(null, "All sources", null, totalDocs, activeId == null));
+        ScopeMenuPanel.Children.Add(BuildScopeFilterBox());
+
+        var allActive = scope.Kind == ScopeKind.All;
+        ScopeMenuPanel.Children.Add(BuildScopeAllRow(entries.Length, allActive));
+
+        var filter = _scopeFilter.Trim();
+        var filtering = filter.Length > 0;
         foreach (var collection in collections)
-            ScopeMenuPanel.Children.Add(BuildScopeRow(collection.Id, collection.Name, collection.Color,
-                collection.Count, activeId == collection.Id));
+        {
+            var docs = DocumentsInCollection(collection, entries);
+            if (filtering)
+            {
+                docs = docs.Where(d => d.Title.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (docs.Length == 0)
+                    continue; // при активном фильтре прячем коллекции без совпадений
+            }
+
+            var collectionActive = scope.Kind == ScopeKind.Collection && scope.CollectionId == collection.Id;
+            // Фильтр авто-разворачивает коллекции с совпадениями.
+            var expanded = filtering || _expandedScopeCollections.Contains(collection.Id);
+            ScopeMenuPanel.Children.Add(BuildScopeCollectionRow(collection, docs.Length, collectionActive, expanded));
+            if (expanded)
+                foreach (var doc in docs)
+                    ScopeMenuPanel.Children.Add(BuildScopeDocRow(doc, collection.Color, selectedDocs.Contains(doc.DocumentId!.Value)));
+        }
 
         ScopeMenuPanel.Children.Add(new Rectangle
         {
@@ -231,31 +275,60 @@ public partial class RagWindow : Window
             Fill = Brush.Parse("#262a33"),
             Margin = new Thickness(4, 4, 4, 2),
         });
-        var manage = BuildScopeManageRow();
-        ScopeMenuPanel.Children.Add(manage);
+        ScopeMenuPanel.Children.Add(BuildScopeFooter(selectedDocs.Count));
+    }
+
+    private static SourceLibraryEntry[] DocumentsInCollection(BookCollectionSummary collection, SourceLibraryEntry[] entries)
+    {
+        // Дефолтная «General» — документы без пользовательского членства; иначе члены коллекции.
+        return collection.IsDefault
+            ? entries.Where(e => e.CollectionIds.Count == 0).ToArray()
+            : entries.Where(e => e.CollectionIds.Contains(collection.Id)).ToArray();
     }
 
     private static string DocsLabel(int count) => $"{count} doc{(count == 1 ? string.Empty : "s")}";
 
-    private Border BuildScopeRow(int? collectionId, string name, string? color, int count, bool active)
+    private static string SourcesLabel(int count) => $"{count} source{(count == 1 ? string.Empty : "s")}";
+
+    private TextBox BuildScopeFilterBox()
     {
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
+        var box = new TextBox
+        {
+            Text = _scopeFilter,
+            Watermark = "Filter sources by name…",
+            FontSize = 12,
+            Margin = new Thickness(4, 4, 4, 6),
+        };
+        box.Classes.Add("scopeFilter");
+        box.AttachedToVisualTree += (_, _) => box.Focus();
+        box.PropertyChanged += (_, args) =>
+        {
+            if (args.Property != TextBox.TextProperty)
+                return;
+            _scopeFilter = box.Text ?? string.Empty;
+            RefreshScopeSelector();
+        };
+        return box;
+    }
+
+    private Border BuildScopeAllRow(int totalDocs, bool active)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
 
         var square = new Border
         {
             Width = 9,
             Height = 9,
             CornerRadius = new CornerRadius(3),
-            Background = color != null ? Brush.Parse(color) : DefaultScopeSquareBrush,
-            Margin = new Thickness(0, 0, 8, 0),
+            Background = DefaultScopeSquareBrush,
+            Margin = new Thickness(20, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            IsVisible = collectionId != null,
         };
         Grid.SetColumn(square, 0);
 
         var label = new TextBlock
         {
-            Text = name,
+            Text = "All sources",
             FontSize = 12.5,
             Foreground = Brush.Parse("#dfe3ea"),
             VerticalAlignment = VerticalAlignment.Center,
@@ -265,7 +338,7 @@ public partial class RagWindow : Window
 
         var countText = new TextBlock
         {
-            Text = count.ToString(CultureInfo.InvariantCulture),
+            Text = totalDocs.ToString(CultureInfo.InvariantCulture),
             FontSize = 10.5,
             Foreground = RowMutedBrush,
             FontFamily = MonoFont,
@@ -284,30 +357,213 @@ public partial class RagWindow : Window
         };
         Grid.SetColumn(check, 3);
 
-        row.Children.Add(square);
-        row.Children.Add(label);
-        row.Children.Add(countText);
-        row.Children.Add(check);
+        grid.Children.Add(square);
+        grid.Children.Add(label);
+        grid.Children.Add(countText);
+        grid.Children.Add(check);
 
-        var border = new Border
-        {
-            Background = Brushes.Transparent,
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(8, 7),
-            Cursor = new Cursor(StandardCursorType.Hand),
-            Child = row,
-        };
-        border.Classes.Add("scopeRow");
-        border.PointerPressed += (_, _) =>
+        return WrapScopeRow(grid, (_, _) =>
         {
             (ScopeButton.Flyout as Flyout)?.Hide();
-            _dialogManager.SetCollectionScope(collectionId);
+            _dialogManager.SetCollectionScope(null);
             RefreshScopeSelector();
-        };
-        return border;
+        });
     }
 
-    private Border BuildScopeManageRow()
+    private Border BuildScopeCollectionRow(BookCollectionSummary collection, int count, bool active, bool expanded)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto,Auto") };
+
+        // Карета разворота — отдельная кликабельная зона (не меняет scope, только раскрывает документы).
+        var caret = new Border
+        {
+            Width = 16,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Background = Brushes.Transparent,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Child = new TextBlock
+            {
+                Text = expanded ? "▾" : "▸",
+                FontSize = 9,
+                Foreground = Brush.Parse("#7a818d"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        caret.PointerPressed += (_, e) =>
+        {
+            e.Handled = true; // не пускаем событие в тело строки (иначе выберется коллекция)
+            ToggleScopeCollectionExpanded(collection.Id);
+        };
+        Grid.SetColumn(caret, 0);
+
+        var square = new Border
+        {
+            Width = 9,
+            Height = 9,
+            CornerRadius = new CornerRadius(3),
+            Background = Brush.Parse(collection.Color),
+            Margin = new Thickness(4, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(square, 1);
+
+        var label = new TextBlock
+        {
+            Text = collection.Name,
+            FontSize = 12.5,
+            Foreground = Brush.Parse("#dfe3ea"),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(label, 2);
+
+        var countText = new TextBlock
+        {
+            Text = count.ToString(CultureInfo.InvariantCulture),
+            FontSize = 10.5,
+            Foreground = RowMutedBrush,
+            FontFamily = MonoFont,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(countText, 3);
+
+        var check = new TextBlock
+        {
+            Text = active ? "✓" : string.Empty,
+            FontSize = 12,
+            Foreground = AccentBrush,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(check, 4);
+
+        grid.Children.Add(caret);
+        grid.Children.Add(square);
+        grid.Children.Add(label);
+        grid.Children.Add(countText);
+        grid.Children.Add(check);
+
+        return WrapScopeRow(grid, (_, _) =>
+        {
+            (ScopeButton.Flyout as Flyout)?.Hide();
+            _dialogManager.SetCollectionScope(collection.Id);
+            RefreshScopeSelector();
+        });
+    }
+
+    private Border BuildScopeDocRow(SourceLibraryEntry entry, string color, bool selected)
+    {
+        var docId = entry.DocumentId!.Value;
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
+
+        var checkbox = new Border
+        {
+            Width = 15,
+            Height = 15,
+            CornerRadius = new CornerRadius(4),
+            BorderThickness = new Thickness(selected ? 0 : 1),
+            BorderBrush = Brush.Parse("#3a4150"),
+            Background = selected ? AccentBrush : Brushes.Transparent,
+            Margin = new Thickness(20, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = selected ? "✓" : string.Empty,
+                FontSize = 10,
+                FontWeight = FontWeight.Bold,
+                Foreground = Brush.Parse("#0b1220"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        Grid.SetColumn(checkbox, 0);
+
+        var square = new Border
+        {
+            Width = 7,
+            Height = 7,
+            CornerRadius = new CornerRadius(2),
+            Background = Brush.Parse(color),
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(square, 1);
+
+        var label = new TextBlock
+        {
+            Text = entry.Title,
+            FontSize = 12,
+            Foreground = selected ? Brush.Parse("#dfe3ea") : Brush.Parse("#9aa1ad"),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(label, 2);
+
+        grid.Children.Add(checkbox);
+        grid.Children.Add(square);
+        grid.Children.Add(label);
+
+        // Тоггл документа сразу меняет scope, но меню НЕ закрываем — можно отметить несколько подряд.
+        return WrapScopeRow(grid, (_, _) => ToggleScopeDocument(docId));
+    }
+
+    private Border BuildScopeFooter(int selectedCount)
+    {
+        var content = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+
+        if (selectedCount > 0)
+        {
+            var selectedText = new TextBlock
+            {
+                Text = SelectedLabel(selectedCount),
+                FontSize = 11.5,
+                Foreground = AccentBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0),
+            };
+            Grid.SetColumn(selectedText, 0);
+
+            var clear = new TextBlock
+            {
+                Text = "Clear",
+                FontSize = 11.5,
+                Foreground = Brush.Parse("#9aa1ad"),
+                VerticalAlignment = VerticalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            clear.Classes.Add("scopeClear");
+            var clearWrap = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(6, 4),
+                Cursor = new Cursor(StandardCursorType.Hand),
+                Child = clear,
+            };
+            clearWrap.PointerPressed += (_, _) =>
+            {
+                _dialogManager.SetCollectionScope(null);
+                RefreshScopeSelector();
+            };
+            Grid.SetColumn(clearWrap, 1);
+
+            content.Children.Add(selectedText);
+            content.Children.Add(clearWrap);
+        }
+
+        var library = BuildScopeLibraryRow();
+
+        var stack = new StackPanel();
+        if (selectedCount > 0)
+            stack.Children.Add(content);
+        stack.Children.Add(library);
+        return new Border { Child = stack };
+    }
+
+    private static string SelectedLabel(int count) => $"{count} selected";
+
+    private Border BuildScopeLibraryRow()
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
         content.Children.Add(new TextBlock
@@ -319,27 +575,53 @@ public partial class RagWindow : Window
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Manage collections in library",
+            Text = "Library",
             FontSize = 11.5,
             Foreground = Brush.Parse("#9aa1ad"),
             VerticalAlignment = VerticalAlignment.Center,
         });
 
+        return WrapScopeRow(content, async (_, _) =>
+        {
+            (ScopeButton.Flyout as Flyout)?.Hide();
+            await OpenLibraryAsync();
+        });
+    }
+
+    private static Border WrapScopeRow(Control child, EventHandler<PointerPressedEventArgs> onClick)
+    {
         var border = new Border
         {
             Background = Brushes.Transparent,
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(8, 7),
             Cursor = new Cursor(StandardCursorType.Hand),
-            Child = content,
+            Child = child,
         };
         border.Classes.Add("scopeRow");
-        border.PointerPressed += async (_, _) =>
-        {
-            (ScopeButton.Flyout as Flyout)?.Hide();
-            await OpenLibraryAsync();
-        };
+        border.PointerPressed += onClick;
         return border;
+    }
+
+    private void ToggleScopeCollectionExpanded(int collectionId)
+    {
+        if (!_expandedScopeCollections.Add(collectionId))
+            _expandedScopeCollections.Remove(collectionId);
+        RefreshScopeSelector();
+    }
+
+    private void ToggleScopeDocument(int documentId)
+    {
+        var current = _dialogManager.CurrentScope;
+        var ids = current.Kind == ScopeKind.Documents
+            ? new List<int>(current.DocumentIds)
+            : new List<int>();
+
+        if (!ids.Remove(documentId))
+            ids.Add(documentId);
+
+        _dialogManager.SetDocumentScope(ids);
+        RefreshScopeSelector();
     }
 
     private void ApplyRetrievalNotice(RagAskResult result)
@@ -374,8 +656,10 @@ public partial class RagWindow : Window
             if (_libraryManager == null)
                 return;
 
-            await new SourceLibraryWindow(_libraryManager).ShowDialog(this);
-            // Коллекции/состав могли измениться — пересобираем меню области поиска.
+            // «Search only this source» из библиотеки: ограничить область поиска одним документом.
+            await new SourceLibraryWindow(_libraryManager, docId => _dialogManager.SetDocumentScope(new[] { docId }))
+                .ShowDialog(this);
+            // Коллекции/состав/область могли измениться — пересобираем меню области поиска.
             RefreshScopeSelector();
         }
         catch (Exception exception)
@@ -977,6 +1261,7 @@ public partial class RagWindow : Window
 
     private void RenderSources(KnowledgeChunk[] chunks)
     {
+        RebuildSourceBadges();
         SourcesPanel.Children.Clear();
         var any = chunks.Length > 0;
         SourcesEmptyPanel.IsVisible = !any;
@@ -984,6 +1269,67 @@ public partial class RagWindow : Window
         SourcesCountText.Text = any ? $"top-{chunks.Length}" : "none yet";
         for (var i = 0; i < chunks.Length; i++)
             SourcesPanel.Children.Add(BuildSourceCard(i + 1, chunks[i]));
+    }
+
+    /// <summary>
+    /// Карта DocumentId → бейдж коллекции (первая пользовательская коллекция документа, иначе «General»)
+    /// для карточек источников. Пересобирается перед каждым рендером источников.
+    /// </summary>
+    private void RebuildSourceBadges()
+    {
+        _sourceBadges = new Dictionary<int, (string, string)>();
+        if (_libraryManager == null)
+            return;
+
+        var collections = _libraryManager.GetCollections().ToDictionary(c => c.Id);
+        foreach (var entry in _libraryManager.GetEntries())
+        {
+            if (entry.DocumentId is not { } id)
+                continue;
+
+            var userCollection = entry.CollectionIds
+                .Select(cid => collections.TryGetValue(cid, out var c) ? c : null)
+                .FirstOrDefault(c => c is { IsDefault: false });
+            _sourceBadges[id] = userCollection != null
+                ? (userCollection.Name, userCollection.Color)
+                : (SourceLibraryManager.DefaultCollectionName, SourceLibraryManager.DefaultCollectionColor);
+        }
+    }
+
+    /// <summary>
+    /// «Only this»: открывает новый диалог, ограниченный одним источником карточки, и ждёт нового вопроса
+    /// (не переспрашивает прежний — пользователь вводит новый промпт в чистом диалоге).
+    /// </summary>
+    internal async Task OnlyThisSource(KnowledgeChunk chunk)
+    {
+        if (_libraryManager == null)
+            return;
+
+        // DocumentId известен у живых результатов; в легаси-снимках истории (0) — ищем по заголовку.
+        var docId = chunk.DocumentId;
+        if (docId == 0)
+        {
+            var match = _libraryManager.GetEntries()
+                .FirstOrDefault(e => e.DocumentId.HasValue &&
+                                     string.Equals(e.Title, chunk.SourceTitle, StringComparison.Ordinal));
+            if (match?.DocumentId is not { } resolved)
+            {
+                Logger.Warn("Only this: source {0} not found in library", chunk.SourceTitle);
+                return;
+            }
+            docId = resolved;
+        }
+
+        // Чистый новый диалог: пустой промпт, без старого ответа/источников.
+        await _dialogManager.StartNewSession();
+        ResetWorkbenchToLive();
+
+        // Область нового диалога — только этот источник; pill обновляем после установки scope.
+        _dialogManager.SetDocumentScope(new[] { docId });
+        RefreshScopeSelector();
+
+        PromptBox.Focus();
+        UpdateSendState();
     }
 
     private Border BuildSourceCard(int index, KnowledgeChunk chunk)
@@ -1030,6 +1376,8 @@ public partial class RagWindow : Window
         var titles = new StackPanel();
         titles.Children.Add(title);
         titles.Children.Add(location);
+        if (_libraryManager != null && chunk.DocumentId != 0 && _sourceBadges.TryGetValue(chunk.DocumentId, out var badge))
+            titles.Children.Add(BuildSourceCollectionBadge(badge.Name, badge.Color));
         Grid.SetColumn(titles, 1);
 
         var scoreText = new TextBlock
@@ -1095,6 +1443,33 @@ public partial class RagWindow : Window
         };
         buttons.Children.Add(summarizeBtn);
         buttons.Children.Add(fullBtn);
+
+        // «Only this» — переспросить текущий вопрос только по этому источнику (доступно при включённом RAG).
+        if (_libraryManager != null)
+        {
+            var onlyBtn = new Button
+            {
+                Content = "Only this",
+                FontSize = 11,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = AccentBrush,
+                Padding = new Thickness(10, 4),
+            };
+            onlyBtn.Classes.Add("chip");
+            ToolTip.SetTip(onlyBtn, "Re-ask this question against only this source");
+            onlyBtn.Click += async (_, _) =>
+            {
+                try
+                {
+                    await OnlyThisSource(chunk);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn(ex, "Only this source failed");
+                }
+            };
+            buttons.Children.Add(onlyBtn);
+        }
 
         var summaryText = new TextBlock
         {
@@ -1210,6 +1585,47 @@ public partial class RagWindow : Window
             // и не растягивает плашку шире остальных.
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Child = inner,
+        };
+    }
+
+    /// <summary>
+    /// Компактный бейдж коллекции (цвет + имя) для карточки источника.
+    /// </summary>
+    private static Border BuildSourceCollectionBadge(string name, string color)
+    {
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+        };
+        content.Children.Add(new Border
+        {
+            Width = 8,
+            Height = 8,
+            CornerRadius = new CornerRadius(2),
+            Background = Brush.Parse(color),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = name,
+            FontSize = 10.5,
+            Foreground = Brush.Parse("#9aa1ad"),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 160,
+        });
+
+        return new Border
+        {
+            Background = Brush.Parse("#13161c"),
+            BorderBrush = Brush.Parse("#2a2e37"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(20),
+            Padding = new Thickness(7, 2),
+            Margin = new Thickness(0, 5, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = content,
         };
     }
 

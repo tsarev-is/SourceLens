@@ -34,11 +34,14 @@ public class RagWindowTests
         public required RagDialogManager DialogManager { get; init; }
 
         public ManualLlm? ManualLlm { get; init; }
+
+        public DbContextOptionsBuilder<SourceLensContext>? Builder { get; init; }
     }
 
-    private static Harness CreateWindow(SourceLibraryManager? libraryManager = null)
+    private static Harness CreateWindow(SourceLibraryManager? libraryManager = null,
+        DbContextOptionsBuilder<SourceLensContext>? builder = null)
     {
-        var builder = new DbContextOptionsBuilder<SourceLensContext>()
+        builder ??= new DbContextOptionsBuilder<SourceLensContext>()
             .UseInMemoryDatabase("RagWindowTests_" + Guid.NewGuid());
 
         SourceLensContext GetContext()
@@ -76,7 +79,7 @@ public class RagWindowTests
             (_, _) => Task.FromResult(new CliProbeResult(true, "1.0.0", "/usr/bin/stub")),
             CreateEngineOptions());
 
-        return new Harness { Window = window, Llm = llm, DialogManager = dialogManager };
+        return new Harness { Window = window, Llm = llm, DialogManager = dialogManager, Builder = builder };
     }
 
     internal static EngineOption[] CreateEngineOptions()
@@ -152,13 +155,76 @@ public class RagWindowTests
                 .GetLogicalDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
             Assert.That(menuTexts, Does.Contain("All sources"));
             Assert.That(menuTexts, Does.Contain("Dense retrieval"));
-            Assert.That(menuTexts, Does.Contain("Manage collections in library"));
+            Assert.That(menuTexts, Does.Contain("Library"));
 
             // Активная коллекция отражается в таблетке.
             harness.DialogManager.SetCollectionScope(collectionId);
             harness.Window.RefreshScopeSelector();
             Assert.That(harness.Window.ScopeLabelText.Text, Is.EqualTo("Dense retrieval"));
             Assert.That(harness.Window.ScopeSquare.IsVisible, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(booksFolder))
+                Directory.Delete(booksFolder, recursive: true);
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task OnlyThis_OnSourceCard_OpensFreshDialogScopedToSingleDocument()
+    {
+        var builder = new DbContextOptionsBuilder<SourceLensContext>()
+            .UseInMemoryDatabase("RagWindowOnly_" + Guid.NewGuid());
+
+        // Документ с тем же заголовком, что отдаёт StubRetriever («IR Book»), чтобы «Only this» нашёл его id.
+        int docId;
+        using (var ctx = new SourceLensContext(builder.Options))
+        {
+            ctx.Database.EnsureCreated();
+            docId = ctx.Set<SourceLens.Domain.Entities.Models.BookDocumentItem>().Add(
+                SourceLens.Domain.Entities.Models.BookDocumentItem.Create(
+                    "IR Book", "/books/ir-book.pdf", "sha-ir", "v1", "fake-v1", 4, 10)).Entity.Id;
+            ctx.SaveChanges();
+        }
+
+        var booksFolder = Path.Combine(Path.GetTempPath(), "books_" + Guid.NewGuid());
+        try
+        {
+            var manager = new SourceLibraryManager(
+                () =>
+                {
+                    var ctx = new SourceLensContext(builder.Options);
+                    ctx.Database.EnsureCreated();
+                    return ctx;
+                },
+                new StubIngestor(), booksFolder);
+
+            var harness = CreateWindow(manager, builder);
+            harness.Window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            harness.Window.PromptBox.Text = "What is dense retrieval?";
+            await harness.Window.SendAsync();
+            Dispatcher.UIThread.RunJobs();
+            var firstSession = harness.DialogManager.CurrentSession.Id;
+
+            // На карточке источника жмём «Only this».
+            var onlyButton = harness.Window.SourcesPanel
+                .GetLogicalDescendants().OfType<Button>()
+                .First(b => Equals(b.Content, "Only this"));
+            onlyButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+
+            // Открылся новый пустой диалог, ограниченный этим источником, без переспроса старого вопроса.
+            Assert.That(harness.DialogManager.CurrentSession.Id, Is.Not.EqualTo(firstSession));
+            Assert.That(harness.DialogManager.CurrentScope.Kind, Is.EqualTo(ScopeKind.Documents));
+            Assert.That(harness.DialogManager.CurrentScope.DocumentIds, Is.EquivalentTo(new[] { docId }));
+            Assert.That(harness.Window.ScopeLabelText.Text, Is.EqualTo("1 source"));
+            // Промпт чистый, ждём нового ввода; новый диалог без обменов.
+            Assert.That(harness.Window.PromptBox.Text, Is.Empty);
+            Assert.That(harness.DialogManager.GetExchanges(harness.DialogManager.CurrentSession.Id), Is.Empty);
+            // Исходный обмен остался в прежней сессии.
+            Assert.That(harness.DialogManager.GetExchanges(firstSession), Has.Length.EqualTo(1));
         }
         finally
         {
