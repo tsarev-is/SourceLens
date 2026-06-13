@@ -16,4 +16,14 @@ public class RagExchangeView
     public string Answer { get; init; } = string.Empty;
 
     public KnowledgeChunk[] Sources { get; init; } = Array.Empty<KnowledgeChunk>();
+
+    /// <summary>
+    /// Имя коллекции, к которой был ограничен ретрив обмена (null — «All sources»).
+    /// </summary>
+    public string? ScopeName { get; init; }
+
+    /// <summary>
+    /// Цвет коллекции области поиска обмена (null — «All sources»).
+    /// </summary>
+    public string? ScopeColor { get; init; }
 }

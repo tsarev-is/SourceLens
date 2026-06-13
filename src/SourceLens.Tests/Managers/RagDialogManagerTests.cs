@@ -460,22 +460,57 @@ public class RagDialogManagerTests
     }
 
     [Test]
-    public async Task SetScope_PersistsPerSession_AndIsPassedToRetriever()
+    public async Task SetCollectionScope_ResolvesToMemberDocuments_AndIsPassedToRetriever()
     {
+        var (collectionId, docIds) = SeedCollectionWithDocuments("Dense retrieval", "#6aa6ff", 2);
         _retriever.Chunks = Array.Empty<KnowledgeChunk>();
         var manager = CreateManager();
-        manager.SetScope(new[] { 7, 9 });
 
-        Assert.That(manager.CurrentScopeDocumentIds, Is.EquivalentTo(new[] { 7, 9 }));
+        manager.SetCollectionScope(collectionId);
+        Assert.That(manager.CurrentScopeCollectionId, Is.EqualTo(collectionId));
 
         await manager.Ask("a sufficiently long question");
 
         var scope = _retriever.Scopes.Single();
-        Assert.That(scope!.DocumentIds, Is.EquivalentTo(new[] { 7, 9 }));
+        Assert.That(scope!.DocumentIds, Is.EquivalentTo(docIds));
 
         // Сброс на всю библиотеку.
-        manager.SetScope(Array.Empty<int>());
-        Assert.That(manager.CurrentScope.IsWholeLibrary, Is.True);
+        manager.SetCollectionScope(null);
+        Assert.That(manager.CurrentScopeCollectionId, Is.Null);
+    }
+
+    [Test]
+    public async Task Ask_EmptyCollectionScope_SkipsRetrieval_AndReportsEmpty()
+    {
+        int collectionId;
+        using (var ctx = Global.CreateContext(_builder))
+            collectionId = ctx.AddCollection("Empty", "#4ec98a").GetAwaiter().GetResult().Id;
+
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "should not be used", Score = 0.9f } };
+        var manager = CreateManager();
+        manager.SetCollectionScope(collectionId);
+
+        var result = await manager.Ask("a sufficiently long question");
+
+        Assert.That(_retriever.Calls, Is.Empty, "ретрив по пустой коллекции не должен запускаться");
+        Assert.That(result.Retrieval, Is.EqualTo(RetrievalState.NoneFound));
+        Assert.That(result.ScopeEmpty, Is.True);
+        Assert.That(result.ScopeName, Is.EqualTo("Empty"));
+    }
+
+    [Test]
+    public async Task Ask_SnapshotsScopeNameAndColor_OnExchange()
+    {
+        var (collectionId, _) = SeedCollectionWithDocuments("Dense retrieval", "#6aa6ff", 1);
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "hit", Score = 0.9f } };
+        var manager = CreateManager();
+        manager.SetCollectionScope(collectionId);
+
+        await manager.Ask("a sufficiently long question");
+
+        var exchange = manager.GetExchanges(manager.CurrentSession.Id).Single();
+        Assert.That(exchange.ScopeName, Is.EqualTo("Dense retrieval"));
+        Assert.That(exchange.ScopeColor, Is.EqualTo("#6aa6ff"));
     }
 
     [Test]
@@ -483,15 +518,40 @@ public class RagDialogManagerTests
     {
         var manager = CreateManager();
         var sessionId = manager.CurrentSession.Id;
-        manager.SetScope(new[] { 3 });
+        int collectionId;
+        using (var ctx = Global.CreateContext(_builder))
+            collectionId = ctx.AddCollection("Lexical", "#4ec98a").GetAwaiter().GetResult().Id;
+        manager.SetCollectionScope(collectionId);
 
         using (var ctx = Global.CreateContext(_builder))
-            Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.EqualTo("3"));
+            Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.EqualTo(collectionId.ToString()));
 
         await manager.DeleteSession(sessionId);
 
         using (var ctx = Global.CreateContext(_builder))
             Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.Null,
                 "scope-настройка удалённой сессии не должна копиться в app_settings");
+    }
+
+    /// <summary>
+    /// Создаёт пользовательскую коллекцию с N книгами-членами; возвращает id коллекции и книг.
+    /// </summary>
+    private (int CollectionId, int[] DocumentIds) SeedCollectionWithDocuments(string name, string color, int count)
+    {
+        using var ctx = Global.CreateContext(_builder);
+        var docIds = new int[count];
+        for (var i = 0; i < count; i++)
+        {
+            var doc = ctx.Set<BookDocumentItem>().Add(
+                BookDocumentItem.Create($"{name} doc {i}", $"/books/{name}-{i}.pdf", $"sha-{name}-{i}", "v1", "fake-v1", 4, 10)).Entity;
+            ctx.SaveChanges();
+            docIds[i] = doc.Id;
+        }
+
+        var collectionId = ctx.AddCollection(name, color).GetAwaiter().GetResult().Id;
+        foreach (var id in docIds)
+            ctx.AddCollectionMember(collectionId, id).GetAwaiter().GetResult();
+
+        return (collectionId, docIds);
     }
 }

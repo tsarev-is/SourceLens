@@ -268,4 +268,91 @@ public class SourceLibraryManagerTests
 
         Assert.That(calls, Is.GreaterThanOrEqualTo(2), "at least queued + completed");
     }
+
+    // ---------- Коллекции ----------
+
+    [Test]
+    public void Constructor_SeedsDefaultCollection()
+    {
+        BuildManager();
+
+        var collections = BuildManager().GetCollections();
+        Assert.That(collections, Has.Length.EqualTo(1));
+        Assert.That(collections[0].IsDefault, Is.True);
+        Assert.That(collections[0].Name, Is.EqualTo(SourceLibraryManager.DefaultCollectionName));
+    }
+
+    [Test]
+    public async Task CreateCollection_CyclesPaletteColors()
+    {
+        var manager = BuildManager();
+
+        await manager.CreateCollection("First");
+        await manager.CreateCollection("Second");
+
+        var user = manager.GetCollections().Where(c => !c.IsDefault).OrderBy(c => c.Name).ToArray();
+        Assert.That(user, Has.Length.EqualTo(2));
+        // Первая пользовательская — первый цвет палитры, вторая — следующий.
+        Assert.That(user.Single(c => c.Name == "First").Color, Is.EqualTo("#6aa6ff"));
+        Assert.That(user.Single(c => c.Name == "Second").Color, Is.EqualTo("#4ec98a"));
+    }
+
+    [Test]
+    public async Task AddToAndRemoveFromCollection_ReflectsInEntries()
+    {
+        var manager = BuildManager();
+        int docId;
+        using (var ctx = GetContext())
+        {
+            docId = ctx.Set<BookDocumentItem>().Add(
+                BookDocumentItem.Create("Doc", "/books/doc.pdf", "sha", "v1", "fake-v1", 4, 5)).Entity.Id;
+            ctx.SaveChanges();
+        }
+
+        var collectionId = await manager.CreateCollection("Dense");
+
+        await manager.AddToCollection(docId, collectionId);
+        Assert.That(manager.GetEntries().Single(e => e.DocumentId == docId).CollectionIds,
+            Is.EquivalentTo(new[] { collectionId }));
+
+        await manager.RemoveFromCollection(docId, collectionId);
+        Assert.That(manager.GetEntries().Single(e => e.DocumentId == docId).CollectionIds, Is.Empty);
+    }
+
+    [Test]
+    public async Task AddSource_IntoCollection_AddsMembershipOnCompletion()
+    {
+        var manager = BuildManager();
+        var collectionId = await manager.CreateCollection("Dense");
+        var source = WriteExternalFile("paper.fake");
+
+        await manager.AddSourceAsync(source, collectionId);
+        await manager.WhenQueueDrained();
+
+        var entry = manager.GetEntries().Single(e => e.DocumentId != null);
+        Assert.That(entry.CollectionIds, Is.EquivalentTo(new[] { collectionId }),
+            "загруженный в коллекцию документ получает её членство, а не оседает в General");
+    }
+
+    [Test]
+    public async Task AddSource_IntoCollection_PendingCardCarriesCollectionWhileIndexing()
+    {
+        Directory.CreateDirectory(_booksFolder);
+        var file = Path.Combine(_booksFolder, "busy.fake");
+        File.WriteAllText(file, "queued content");
+
+        var stub = new StubIngestor { Gate = new TaskCompletionSource() };
+        var manager = new SourceLibraryManager(GetContext, stub, _booksFolder, new[] { ".fake" });
+        var collectionId = await manager.CreateCollection("Dense");
+
+        await manager.AddSourceAsync(file, collectionId);
+        Assert.That(SpinWait.SpinUntil(() => stub.Ingested.Length > 0, 5000), Is.True);
+
+        // Карточка очереди уже несёт целевую коллекцию — она видна в её фильтре во время индексации.
+        var pending = manager.GetEntries().Single(e => e.Indexing);
+        Assert.That(pending.CollectionIds, Is.EquivalentTo(new[] { collectionId }));
+
+        stub.Gate.SetResult();
+        await manager.WhenQueueDrained();
+    }
 }

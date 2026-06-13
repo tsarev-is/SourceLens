@@ -16,6 +16,11 @@ public class SourceLibraryEntry
 
     public int ChunkCount { get; init; }
 
+    /// <summary>
+    /// Id пользовательских коллекций, в которые входит документ (пусто — он в дефолтной «General»).
+    /// </summary>
+    public IReadOnlyList<int> CollectionIds { get; init; } = Array.Empty<int>();
+
     public bool Indexing { get; init; }
 
     /// <summary>

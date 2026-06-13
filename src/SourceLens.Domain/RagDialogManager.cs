@@ -21,7 +21,9 @@ public class RagDialogManager
     private readonly Func<AbstractLlmInferences> _getLlm;
     private readonly IKnowledgeRetriever _retriever;
     private readonly RetrievalOptions _retrievalOptions;
-    private readonly Dictionary<int, RetrievalScope> _scopeBySession = new();
+
+    // Область поиска сессии — id коллекции (null — «All sources», вся библиотека). Кэш + персист в app_settings.
+    private readonly Dictionary<int, int?> _scopeCollectionBySession = new();
 
     private const string ScopeSettingPrefix = "rag.scope.";
 
@@ -69,6 +71,8 @@ public class RagDialogManager
             Question = p.Question,
             Answer = p.Answer ?? string.Empty,
             Sources = DeserializeSources(p.SourcesJson),
+            ScopeName = p.ScopeName,
+            ScopeColor = p.ScopeColor,
         }).ToArray();
     }
 
@@ -150,9 +154,14 @@ public class RagDialogManager
 
         progress?.Report(RagPhase.Retrieving);
 
+        // Область поиска: коллекция → её книги. Пустая коллекция (без проиндексированных книг) —
+        // ретрив не запускаем, чтобы не «расширяться» на всю библиотеку (RetrievalScope трактует
+        // пустой DocumentIds как WholeLibrary), а честно вернуть «нет источников».
+        var resolved = ResolveScope(sessionId);
+
         var retrievalRan = question.Length >= _retrievalOptions.MinQueryLength;
         var sources = Array.Empty<KnowledgeChunk>();
-        if (retrievalRan)
+        if (retrievalRan && !resolved.EmptyCollection)
         {
             // Уточняющий вопрос ("а что было дальше?") сам по себе даёт бессмысленный вектор —
             // переписываем его в самодостаточный запрос с опорой на историю диалога.
@@ -160,7 +169,7 @@ public class RagDialogManager
                 ? await BuildStandaloneQuery(question, priorContext, sessionId)
                 : question;
             // priorPairs.Length == 0 — первый вопрос диалога, переписывать нечего.
-            sources = await _retriever.Retrieve(retrievalQuery, _retrievalOptions.TopK, GetScope(sessionId), ct);
+            sources = await _retriever.Retrieve(retrievalQuery, _retrievalOptions.TopK, resolved.Scope, ct);
         }
 
         var state = !retrievalRan
@@ -187,12 +196,20 @@ public class RagDialogManager
         if (string.IsNullOrWhiteSpace(session.Title))
             session.SetTitle(BuildTitle(question));
 
-        var exchange = await ctx.AddRagExchange(session, question, JsonConvert.SerializeObject(sources));
+        var exchange = await ctx.AddRagExchange(session, question, JsonConvert.SerializeObject(sources),
+            resolved.Name, resolved.Color);
         exchange.SetAnswer(answer);
         await ctx.SaveChangesAsync(CancellationToken.None);
         CurrentSession = session;
 
-        return new RagAskResult { Answer = answer, Sources = sources, Retrieval = state };
+        return new RagAskResult
+        {
+            Answer = answer,
+            Sources = sources,
+            Retrieval = state,
+            ScopeName = resolved.Name,
+            ScopeEmpty = resolved.EmptyCollection,
+        };
     }
 
     /// <summary>
@@ -228,54 +245,64 @@ public class RagDialogManager
         return ctx.GetRagExchanges(sessionId).LastOrDefault()?.Question;
     }
 
-    // ---------- Область поиска (per-session) ----------
-
-    /// <summary>Область поиска текущей сессии: пустой <see cref="RetrievalScope.DocumentIds"/> — вся библиотека.</summary>
-    public RetrievalScope CurrentScope => GetScope(CurrentSession.Id);
+    // ---------- Область поиска (per-session, по коллекции) ----------
 
     /// <summary>
-    /// Идентификаторы книг, по которым ограничен поиск текущей сессии (пусто — вся библиотека).
+    /// Id коллекции области поиска текущей сессии (null — «All sources», вся библиотека).
     /// </summary>
-    public IReadOnlyCollection<int> CurrentScopeDocumentIds =>
-        GetScope(CurrentSession.Id).DocumentIds ?? Array.Empty<int>();
+    public int? CurrentScopeCollectionId => GetScopeCollectionId(CurrentSession.Id);
 
-    /// <summary>Задаёт область поиска для текущей сессии и сохраняет её (per-session).</summary>
-    public void SetScope(IReadOnlyCollection<int> documentIds)
+    /// <summary>
+    /// Задаёт область поиска текущей сессии коллекцией (null — вся библиотека) и сохраняет её.
+    /// </summary>
+    public void SetCollectionScope(int? collectionId)
     {
         var sessionId = CurrentSession.Id;
-        var ids = documentIds.Distinct().ToArray();
-        _scopeBySession[sessionId] = ids.Length == 0
-            ? RetrievalScope.WholeLibrary
-            : new RetrievalScope { DocumentIds = ids };
+        _scopeCollectionBySession[sessionId] = collectionId;
 
         using var ctx = _getContext();
-        ctx.SetSetting(ScopeSettingPrefix + sessionId, string.Join(",", ids));
+        ctx.SetSetting(ScopeSettingPrefix + sessionId, collectionId?.ToString() ?? string.Empty);
         ctx.SaveChanges();
     }
 
-    private RetrievalScope GetScope(int sessionId)
+    private int? GetScopeCollectionId(int sessionId)
     {
-        if (_scopeBySession.TryGetValue(sessionId, out var cached))
+        if (_scopeCollectionBySession.TryGetValue(sessionId, out var cached))
             return cached;
 
         using var ctx = _getContext();
-        var scope = ParseScope(ctx.GetSetting(ScopeSettingPrefix + sessionId));
-        _scopeBySession[sessionId] = scope;
-        return scope;
+        // Значение — id коллекции; пусто или нераспознанное (в т.ч. легаси-список книг) — вся библиотека.
+        var raw = ctx.GetSetting(ScopeSettingPrefix + sessionId);
+        var id = int.TryParse(raw, out var parsed) ? parsed : (int?)null;
+        _scopeCollectionBySession[sessionId] = id;
+        return id;
     }
 
-    private static RetrievalScope ParseScope(string? raw)
+    /// <summary>
+    /// Резолвит коллекцию области поиска в книги + снимок её имени/цвета для персиста.
+    /// </summary>
+    private ResolvedScope ResolveScope(int sessionId)
     {
-        if (string.IsNullOrWhiteSpace(raw))
-            return RetrievalScope.WholeLibrary;
+        var collectionId = GetScopeCollectionId(sessionId);
+        if (collectionId == null)
+            return new ResolvedScope(RetrievalScope.WholeLibrary, false, null, null);
 
-        var ids = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(s => int.TryParse(s, out var id) ? id : (int?)null)
-            .Where(id => id.HasValue)
-            .Select(id => id!.Value)
-            .ToArray();
-        return ids.Length == 0 ? RetrievalScope.WholeLibrary : new RetrievalScope { DocumentIds = ids };
+        using var ctx = _getContext();
+        var collection = ctx.FindCollection(collectionId.Value);
+        if (collection == null)
+        {
+            // Коллекция удалена — область сбрасывается на всю библиотеку.
+            _scopeCollectionBySession[sessionId] = null;
+            return new ResolvedScope(RetrievalScope.WholeLibrary, false, null, null);
+        }
+
+        var documentIds = ctx.GetCollectionDocumentIds(collectionId.Value);
+        return documentIds.Length == 0
+            ? new ResolvedScope(RetrievalScope.WholeLibrary, true, collection.Name, collection.Color)
+            : new ResolvedScope(RetrievalScope.ForDocuments(documentIds), false, collection.Name, collection.Color);
     }
+
+    private readonly record struct ResolvedScope(RetrievalScope Scope, bool EmptyCollection, string? Name, string? Color);
 
     private async Task HideSession(SourceLensContext ctx, int sessionId)
     {
@@ -286,7 +313,7 @@ public class RagDialogManager
         session.MarkDeleted();
         // Область поиска привязана к сессии — удаляем её настройку, чтобы ключи rag.scope.* не копились.
         ctx.DeleteSetting(ScopeSettingPrefix + sessionId);
-        _scopeBySession.Remove(sessionId);
+        _scopeCollectionBySession.Remove(sessionId);
         await ctx.SaveChangesAsync();
 
         if (CurrentSession.Id == sessionId)

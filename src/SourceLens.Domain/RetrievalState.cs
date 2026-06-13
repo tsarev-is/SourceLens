@@ -5,12 +5,18 @@ namespace SourceLens.Domain;
 /// </summary>
 public enum RetrievalState
 {
-    /// <summary>Ретрив пропущен (вопрос короче MinQueryLength).</summary>
+    /// <summary>
+    /// Ретрив пропущен (вопрос короче MinQueryLength).
+    /// </summary>
     Skipped,
 
-    /// <summary>Ретрив выполнен, но ни один чанк не прошёл порог релевантности (или корпус пуст).</summary>
+    /// <summary>
+    /// Ретрив выполнен, но ни один чанк не прошёл порог релевантности (или корпус пуст).
+    /// </summary>
     NoneFound,
 
-    /// <summary>Источники найдены и подмешаны в промпт.</summary>
+    /// <summary>
+    /// Источники найдены и подмешаны в промпт.
+    /// </summary>
     Found,
 }

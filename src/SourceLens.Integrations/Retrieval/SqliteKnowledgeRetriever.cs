@@ -32,7 +32,9 @@ public class SqliteKnowledgeRetriever : IKnowledgeRetriever, IDisposable
         _options = options ?? new RetrievalOptions();
     }
 
-    /// <summary>Сбросить кэш векторов (например, по событию изменения библиотеки). Безопасно.</summary>
+    /// <summary>
+    /// Сбросить кэш векторов (например, по событию изменения библиотеки). Безопасно.
+    /// </summary>
     public void InvalidateCache() => _cache = null;
 
     public async Task<KnowledgeChunk[]> Retrieve(string query, int topK, RetrievalScope? scope = null, CancellationToken ct = default)

@@ -49,7 +49,7 @@ public class SourceLibraryWindowTests
 
         Assert.That(window.EmptyText.IsVisible, Is.True);
         Assert.That(window.Cards, Is.Empty);
-        Assert.That(window.LibraryMetaText.Text, Is.EqualTo("0 sources · 0 chunks indexed"));
+        Assert.That(window.LibraryMetaText.Text, Is.EqualTo("0 sources · 1 collection · 0 chunks indexed"));
     }
 
     [AvaloniaTest]
@@ -68,7 +68,7 @@ public class SourceLibraryWindowTests
 
         Assert.That(window.EmptyText.IsVisible, Is.False);
         Assert.That(window.Cards, Has.Count.EqualTo(2));
-        Assert.That(window.LibraryMetaText.Text, Is.EqualTo("2 sources · 2,947 chunks indexed"));
+        Assert.That(window.LibraryMetaText.Text, Is.EqualTo("2 sources · 1 collection · 2,947 chunks indexed"));
 
         // Новый документ (DPR Paper) сверху.
         Assert.That(window.Cards[0].Entry.Title, Is.EqualTo("DPR Paper"));
@@ -106,6 +106,102 @@ public class SourceLibraryWindowTests
     }
 
     [AvaloniaTest]
+    public void Sidebar_ShowsAllSourcesAndDefaultCollection()
+    {
+        var window = new SourceLibraryWindow(BuildManager());
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        // «All sources» (null) + дефолтная General.
+        var names = window.CollectionRows.Select(r => r.Name).ToArray();
+        Assert.That(names, Does.Contain("All sources"));
+        Assert.That(names, Does.Contain(SourceLibraryManager.DefaultCollectionName));
+        Assert.That(window.CollectionRows.Single(r => r.CollectionId == null).Name, Is.EqualTo("All sources"));
+        // У дефолтной нет кнопки удаления.
+        Assert.That(window.CollectionRows.Single(r => r.Name == SourceLibraryManager.DefaultCollectionName).Delete, Is.Null);
+    }
+
+    [AvaloniaTest]
+    public async Task CreateCollection_AddsRow_AndSelectsIt()
+    {
+        var window = new SourceLibraryWindow(BuildManager());
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        window.NewCollectionBox.Text = "Dense retrieval";
+        await window.ConfirmNewCollectionAsync();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(window.CollectionRows.Any(r => r.Name == "Dense retrieval"), Is.True);
+        // Новая коллекция пуста — фильтрованный список показывает empty-state коллекции.
+        Assert.That(window.Cards, Is.Empty);
+        Assert.That(window.EmptyText.Text, Is.EqualTo("No sources in this collection yet."));
+    }
+
+    [AvaloniaTest]
+    public async Task SelectingCollection_FiltersDocuments()
+    {
+        int docId;
+        var manager = BuildManager();
+        using (var ctx = GetContext())
+        {
+            docId = ctx.Set<BookDocumentItem>().Add(
+                BookDocumentItem.Create("IR Book", "/books/ir-book.pdf", "sha1", "v1", "fake-v1", 4, 5)).Entity.Id;
+            ctx.SaveChanges();
+        }
+
+        var collectionId = await manager.CreateCollection("Dense");
+        await manager.AddToCollection(docId, collectionId);
+
+        var window = new SourceLibraryWindow(manager);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        // All sources → виден.
+        Assert.That(window.Cards, Has.Count.EqualTo(1));
+
+        // Дефолтная (General) → пусто, т.к. книга уже в пользовательской коллекции.
+        var general = window.CollectionRows.Single(r => r.Name == SourceLibraryManager.DefaultCollectionName);
+        window.SelectCollectionForTest(general.CollectionId);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(window.Cards, Is.Empty);
+
+        // Пользовательская коллекция Dense → книга снова видна.
+        window.SelectCollectionForTest(collectionId);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(window.Cards, Has.Count.EqualTo(1));
+    }
+
+    [AvaloniaTest]
+    public async Task ToggleMembership_AddsAndRemovesDocumentFromCollection()
+    {
+        int docId;
+        var manager = BuildManager();
+        using (var ctx = GetContext())
+        {
+            docId = ctx.Set<BookDocumentItem>().Add(
+                BookDocumentItem.Create("IR Book", "/books/ir-book.pdf", "sha1", "v1", "fake-v1", 4, 5)).Entity.Id;
+            ctx.SaveChanges();
+        }
+
+        var collectionId = await manager.CreateCollection("Dense");
+
+        var window = new SourceLibraryWindow(manager);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        await window.ToggleMembershipAsync(docId, collectionId, currentlyMember: false);
+        Dispatcher.UIThread.RunJobs();
+        using (var ctx = GetContext())
+            Assert.That(ctx.GetCollectionDocumentIds(collectionId), Is.EquivalentTo(new[] { docId }));
+
+        await window.ToggleMembershipAsync(docId, collectionId, currentlyMember: true);
+        Dispatcher.UIThread.RunJobs();
+        using (var ctx = GetContext())
+            Assert.That(ctx.GetCollectionDocumentIds(collectionId), Is.Empty);
+    }
+
+    [AvaloniaTest]
     public async Task IndexingEntry_ShowsProgressPillAndDisabledRemove()
     {
         Directory.CreateDirectory(_booksFolder);
@@ -139,7 +235,7 @@ public class SourceLibraryWindowTests
         Assert.That(card.Progress, Is.Not.Null);
         Assert.That(card.Progress!.Value, Is.EqualTo(50));
         Assert.That(card.Remove.IsEnabled, Is.False);
-        Assert.That(window.LibraryMetaText.Text, Is.EqualTo("1 source · 0 chunks indexed"));
+        Assert.That(window.LibraryMetaText.Text, Is.EqualTo("1 source · 1 collection · 0 chunks indexed"));
 
         stub.Gate.SetResult();
         await manager.WhenQueueDrained();
@@ -148,5 +244,69 @@ public class SourceLibraryWindowTests
         // Стаб ничего не пишет в БД — после завершения карточка исчезает.
         Assert.That(window.Cards, Is.Empty);
         Assert.That(window.EmptyText.IsVisible, Is.True);
+    }
+
+    [AvaloniaTest]
+    public async Task IndexingProgress_UpdatesCardInPlace_WithoutRebuild()
+    {
+        Directory.CreateDirectory(_booksFolder);
+        var file = Path.Combine(_booksFolder, "new-paper.pdf");
+        File.WriteAllText(file, "pdf-ish content");
+
+        var stub = new StubIngestor { Gate = new TaskCompletionSource() };
+        var manager = BuildManager(stub);
+        var window = new SourceLibraryWindow(manager);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        await window.AddFilesAsync(new[] { file });
+        Assert.That(SpinWait.SpinUntil(() => stub.LastProgress != null, 5000), Is.True);
+        Dispatcher.UIThread.RunJobs();
+
+        var cardBefore = window.Cards.Single();
+        var progressBefore = cardBefore.Progress;
+
+        stub.LastProgress!.Report(new IngestProgress
+        {
+            FilePath = file,
+            Stage = "embedding",
+            ChunksProcessed = 30,
+            TotalChunks = 100,
+        });
+        Dispatcher.UIThread.RunJobs();
+
+        // Тик прогресса не пересоздаёт карточку (нет полного Refresh — нет моргания), а двигает её бар на месте.
+        var cardAfter = window.Cards.Single();
+        Assert.That(ReferenceEquals(cardAfter, cardBefore), Is.True, "карточка не пересоздаётся на тике прогресса");
+        Assert.That(ReferenceEquals(cardAfter.Progress, progressBefore), Is.True);
+        Assert.That(cardAfter.Progress!.Value, Is.EqualTo(30));
+        Assert.That(cardAfter.Percent!.Text, Is.EqualTo("30%"));
+
+        stub.Gate.SetResult();
+        await manager.WhenQueueDrained();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    [AvaloniaTest]
+    public async Task UploadTarget_IsSelectedUserCollection_NullForAllSourcesAndGeneral()
+    {
+        var manager = BuildManager();
+        var collectionId = await manager.CreateCollection("Dense");
+
+        var window = new SourceLibraryWindow(manager);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        // «All sources» (по умолчанию) → без явного членства.
+        Assert.That(window.UploadTargetCollectionId(), Is.Null);
+
+        // Выбрана пользовательская коллекция → загрузка идёт в неё.
+        window.SelectCollectionForTest(collectionId);
+        Assert.That(window.UploadTargetCollectionId(), Is.EqualTo(collectionId));
+
+        // Дефолтная General → null (документ без членства и так попадает в General).
+        var general = window.CollectionRows.Single(r => r.Name == SourceLibraryManager.DefaultCollectionName);
+        window.SelectCollectionForTest(general.CollectionId);
+        Assert.That(window.UploadTargetCollectionId(), Is.Null);
     }
 }

@@ -12,4 +12,14 @@ public class RagAskResult
     /// Чем закончился ретрив: источники найдены, ничего не прошло порог, или ретрив пропущен.
     /// </summary>
     public RetrievalState Retrieval { get; init; } = RetrievalState.NoneFound;
+
+    /// <summary>
+    /// Имя коллекции, к которой был ограничен ретрив (null — «All sources»).
+    /// </summary>
+    public string? ScopeName { get; init; }
+
+    /// <summary>
+    /// True — область ограничена коллекцией без проиндексированных книг (ретрив не запускался).
+    /// </summary>
+    public bool ScopeEmpty { get; init; }
 }

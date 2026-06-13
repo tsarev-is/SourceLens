@@ -5,6 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Microsoft.EntityFrameworkCore;
 using NUnit.Framework;
@@ -119,6 +120,45 @@ public class RagWindowTests
             var withManager = CreateWindow(manager);
             withManager.Window.Show();
             Assert.That(withManager.Window.SourcesButton.IsVisible, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(booksFolder))
+                Directory.Delete(booksFolder, recursive: true);
+        }
+    }
+
+    [AvaloniaTest]
+    public async Task ScopePill_ListsCollections_AndReflectsActiveScope()
+    {
+        var booksFolder = Path.Combine(Path.GetTempPath(), "books_" + Guid.NewGuid());
+        try
+        {
+            var builder = new DbContextOptionsBuilder<SourceLensContext>()
+                .UseInMemoryDatabase("RagWindowScope_" + Guid.NewGuid());
+            var manager = new SourceLibraryManager(
+                () => Global.CreateContext(builder), new StubIngestor(), booksFolder);
+            var collectionId = await manager.CreateCollection("Dense retrieval");
+
+            var harness = CreateWindow(manager);
+            harness.Window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(harness.Window.ScopePanel.IsVisible, Is.True);
+            Assert.That(harness.Window.ScopeLabelText.Text, Is.EqualTo("All sources"));
+
+            // Меню области поиска перечисляет «All sources» и коллекцию.
+            var menuTexts = harness.Window.ScopeMenuPanel
+                .GetLogicalDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
+            Assert.That(menuTexts, Does.Contain("All sources"));
+            Assert.That(menuTexts, Does.Contain("Dense retrieval"));
+            Assert.That(menuTexts, Does.Contain("Manage collections in library"));
+
+            // Активная коллекция отражается в таблетке.
+            harness.DialogManager.SetCollectionScope(collectionId);
+            harness.Window.RefreshScopeSelector();
+            Assert.That(harness.Window.ScopeLabelText.Text, Is.EqualTo("Dense retrieval"));
+            Assert.That(harness.Window.ScopeSquare.IsVisible, Is.True);
         }
         finally
         {
@@ -492,6 +532,136 @@ public class RagWindowTests
         Dispatcher.UIThread.RunJobs();
         Assert.That(window.AnswerBlock.Inlines!.Text, Is.EqualTo("answer three"),
             "по готовности третий ответ заменяет второй");
+    }
+
+    [AvaloniaTest]
+    public async Task Send_PreviousSourcesStayVisibleWhileGenerating_NoBlankFlash()
+    {
+        // Окно с управляемой генерацией и ретривером, отдающим источник: проверяем, что при новом
+        // Send список источников не гаснет в пустую плашку до прихода ответа (фикс моргания).
+        var builder = new DbContextOptionsBuilder<SourceLensContext>()
+            .UseInMemoryDatabase("RagWindowTests_" + Guid.NewGuid());
+
+        SourceLensContext GetContext()
+        {
+            var ctx = new SourceLensContext(builder.Options);
+            ctx.Database.EnsureCreated();
+            return ctx;
+        }
+
+        var llm = new ManualLlm();
+        var retriever = new StubRetriever
+        {
+            Chunks = new[]
+            {
+                new KnowledgeChunk
+                {
+                    Text = "Dense retrieval uses learned embeddings.",
+                    SourceTitle = "IR Book",
+                    SourceLocation = "p. 3",
+                    Score = 0.87f,
+                },
+            },
+        };
+        var dialogManager = new RagDialogManager(GetContext, () => llm, retriever,
+            new RetrievalOptions { TopK = 5, MinQueryLength = 1 }, new RagDialogOptions());
+        var engineManager = new AnswerEngineManager((_, _) => llm,
+            new EngineSettings(GetContext, EngineSettings.ClaudeProvider, "sonnet", "gpt-5-codex"));
+        var window = new RagWindow(
+            engineManager,
+            new TranscriptFactory(new StubTranscriptor()),
+            new UiRecorder(new StubRecorder()),
+            dialogManager,
+            null,
+            (_, _) => Task.FromResult(new CliProbeResult(true, "1.0.0", "/usr/bin/stub")),
+            CreateEngineOptions());
+        window.Show();
+
+        // Первый Send: дожидаемся источника на экране.
+        llm.UsePending = true;
+        window.PromptBox.Text = "question one";
+        var send = window.SendAsync();
+        llm.Pending.SetResult("answer one");
+        await send;
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(window.SourcesScroll.IsVisible, Is.True);
+        Assert.That(window.SourcesEmptyPanel.IsVisible, Is.False);
+        Assert.That(window.SourcesCountText.Text, Is.EqualTo("top-1"));
+
+        // Второй Send в процессе генерации: прежний источник остаётся, пустая плашка не мелькает.
+        llm.ResetPending();
+        window.PromptBox.Text = "question two";
+        send = window.SendAsync();
+        Assert.That(window.SourcesScroll.IsVisible, Is.True,
+            "источники предыдущего ответа видны, пока генерируется новый");
+        Assert.That(window.SourcesEmptyPanel.IsVisible, Is.False, "пустая плашка не мелькает");
+        Assert.That(window.SourcesCountText.Text, Is.EqualTo("top-1"));
+
+        llm.Pending.SetResult("answer two");
+        await send;
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(window.SourcesCountText.Text, Is.EqualTo("top-1"));
+    }
+
+    [AvaloniaTest]
+    public async Task Sources_AllCardsShareWidth_RegardlessOfTitleLength()
+    {
+        var builder = new DbContextOptionsBuilder<SourceLensContext>()
+            .UseInMemoryDatabase("RagWindowTests_" + Guid.NewGuid());
+
+        SourceLensContext GetContext()
+        {
+            var ctx = new SourceLensContext(builder.Options);
+            ctx.Database.EnsureCreated();
+            return ctx;
+        }
+
+        var llm = new CapturingLlm { Answer = "answer [1][2]" };
+        var retriever = new StubRetriever
+        {
+            Chunks = new[]
+            {
+                new KnowledgeChunk
+                {
+                    Text = "Short one.",
+                    SourceTitle = "BM25",
+                    SourceLocation = "p. 1",
+                    Score = 0.81f,
+                },
+                new KnowledgeChunk
+                {
+                    Text = "Long one.",
+                    SourceTitle = "A Very Long Source Title That Would Otherwise Stretch The Card "
+                                  + "Far Wider Than Its Neighbours When Rendered Without Wrapping",
+                    SourceLocation = "an/unusually/long/single/token/location/that/never/wraps/p.999",
+                    Score = 0.79f,
+                },
+            },
+        };
+        var dialogManager = new RagDialogManager(GetContext, () => llm, retriever,
+            new RetrievalOptions { TopK = 5, MinQueryLength = 1 }, new RagDialogOptions());
+        var engineManager = new AnswerEngineManager((_, _) => llm,
+            new EngineSettings(GetContext, EngineSettings.ClaudeProvider, "sonnet", "gpt-5-codex"));
+        var window = new RagWindow(
+            engineManager,
+            new TranscriptFactory(new StubTranscriptor()),
+            new UiRecorder(new StubRecorder()),
+            dialogManager,
+            null,
+            (_, _) => Task.FromResult(new CliProbeResult(true, "1.0.0", "/usr/bin/stub")),
+            CreateEngineOptions());
+        window.Show();
+
+        window.PromptBox.Text = "compare retrieval methods";
+        await window.SendAsync();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+
+        var cards = window.SourcesPanel.Children.OfType<Border>().ToArray();
+        Assert.That(cards, Has.Length.EqualTo(2));
+        Assert.That(cards[0].Bounds.Width, Is.GreaterThan(0));
+        Assert.That(cards[1].Bounds.Width, Is.EqualTo(cards[0].Bounds.Width),
+            "плашки источников одинаковой ширины независимо от длины заголовка");
     }
 
     /// <summary>

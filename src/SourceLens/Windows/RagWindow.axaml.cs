@@ -71,7 +71,6 @@ public partial class RagWindow : Window
     private KnowledgeChunk[] _liveSources = Array.Empty<KnowledgeChunk>();
     private CancellationTokenSource? _summaryCts;
     private readonly Dictionary<string, string> _summaryCache = new();
-    private bool _suppressScopeEvents;
 
     public RagWindow(
         AnswerEngineManager engineManager,
@@ -169,65 +168,190 @@ public partial class RagWindow : Window
         AnswerStatusText.Text = string.Empty;
     }
 
-    // ---------- Область поиска (выбор книги) ----------
+    // ---------- Область поиска (выбор коллекции) ----------
+
+    private static readonly IBrush DefaultScopeSquareBrush = Brush.Parse("#7a818d");
 
     /// <summary>
-    /// Перестраивает дропдаун области поиска из текущей библиотеки и восстанавливает scope сессии.
-    /// Удалённая/переиндексированная книга из сохранённого scope сбрасывается на всю библиотеку.
+    /// Перестраивает «таблетку» области поиска и её меню из коллекций библиотеки и восстанавливает
+    /// scope сессии. Удалённая коллекция в сохранённом scope сбрасывается на всю библиотеку (в ResolveScope).
     /// </summary>
-    private void RefreshScopeSelector()
+    internal void RefreshScopeSelector()
     {
         if (_libraryManager == null)
             return;
 
-        _suppressScopeEvents = true;
-        try
+        var collections = _libraryManager.GetCollections();
+        var totalDocs = _libraryManager.GetEntries().Count(e => e.DocumentId.HasValue);
+        var activeId = _dialogManager.CurrentScopeCollectionId;
+        var active = activeId.HasValue ? collections.FirstOrDefault(c => c.Id == activeId.Value) : null;
+
+        // Активная коллекция исчезла (удалена) — сбрасываем scope на всю библиотеку.
+        if (activeId.HasValue && active == null)
         {
-            var scopeIds = _dialogManager.CurrentScopeDocumentIds;
-            var selectedId = scopeIds.Count == 1 ? scopeIds.First() : (int?)null;
-
-            ScopeCombo.Items.Clear();
-            var allItem = new ComboBoxItem { Content = "All sources", Tag = null };
-            ScopeCombo.Items.Add(allItem);
-            ScopeCombo.SelectedItem = allItem;
-
-            var matched = false;
-            foreach (var book in _libraryManager.GetEntries()
-                         .Where(e => e.DocumentId.HasValue)
-                         .GroupBy(e => e.DocumentId!.Value)
-                         .Select(g => g.First())
-                         .OrderBy(e => e.Title, StringComparer.OrdinalIgnoreCase))
-            {
-                var item = new ComboBoxItem { Content = Truncate(book.Title, 40), Tag = book.DocumentId };
-                ScopeCombo.Items.Add(item);
-                if (selectedId.HasValue && book.DocumentId == selectedId)
-                {
-                    ScopeCombo.SelectedItem = item;
-                    matched = true;
-                }
-            }
-
-            if (selectedId.HasValue && !matched)
-                _dialogManager.SetScope(Array.Empty<int>());
+            _dialogManager.SetCollectionScope(null);
+            activeId = null;
         }
-        finally
+
+        // Шапка таблетки.
+        if (active == null)
         {
-            _suppressScopeEvents = false;
+            ScopeSquare.IsVisible = false;
+            ScopeLabelText.Text = "All sources";
+            ScopeCountText.Text = totalDocs > 0 ? DocsLabel(totalDocs) : string.Empty;
         }
+        else
+        {
+            ScopeSquare.IsVisible = true;
+            ScopeSquare.Background = Brush.Parse(active.Color);
+            ScopeLabelText.Text = Truncate(active.Name, 28);
+            ScopeCountText.Text = DocsLabel(active.Count);
+        }
+
+        // Меню: заголовок, «All sources», коллекции, «Manage collections in library».
+        ScopeMenuPanel.Children.Clear();
+        ScopeMenuPanel.Children.Add(new TextBlock
+        {
+            Text = "Search in collection",
+            FontSize = 9.5,
+            FontWeight = FontWeight.Bold,
+            LetterSpacing = 0.6,
+            Foreground = RowMutedBrush,
+            Margin = new Thickness(8, 6, 8, 5),
+        });
+
+        ScopeMenuPanel.Children.Add(BuildScopeRow(null, "All sources", null, totalDocs, activeId == null));
+        foreach (var collection in collections)
+            ScopeMenuPanel.Children.Add(BuildScopeRow(collection.Id, collection.Name, collection.Color,
+                collection.Count, activeId == collection.Id));
+
+        ScopeMenuPanel.Children.Add(new Rectangle
+        {
+            Height = 1,
+            Fill = Brush.Parse("#262a33"),
+            Margin = new Thickness(4, 4, 4, 2),
+        });
+        var manage = BuildScopeManageRow();
+        ScopeMenuPanel.Children.Add(manage);
     }
 
-    private void ScopeCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private static string DocsLabel(int count) => $"{count} doc{(count == 1 ? string.Empty : "s")}";
+
+    private Border BuildScopeRow(int? collectionId, string name, string? color, int count, bool active)
     {
-        if (_suppressScopeEvents || _libraryManager == null)
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
+
+        var square = new Border
+        {
+            Width = 9,
+            Height = 9,
+            CornerRadius = new CornerRadius(3),
+            Background = color != null ? Brush.Parse(color) : DefaultScopeSquareBrush,
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = collectionId != null,
+        };
+        Grid.SetColumn(square, 0);
+
+        var label = new TextBlock
+        {
+            Text = name,
+            FontSize = 12.5,
+            Foreground = Brush.Parse("#dfe3ea"),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(label, 1);
+
+        var countText = new TextBlock
+        {
+            Text = count.ToString(CultureInfo.InvariantCulture),
+            FontSize = 10.5,
+            Foreground = RowMutedBrush,
+            FontFamily = MonoFont,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(countText, 2);
+
+        var check = new TextBlock
+        {
+            Text = active ? "✓" : string.Empty,
+            FontSize = 12,
+            Foreground = AccentBrush,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(check, 3);
+
+        row.Children.Add(square);
+        row.Children.Add(label);
+        row.Children.Add(countText);
+        row.Children.Add(check);
+
+        var border = new Border
+        {
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 7),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = row,
+        };
+        border.Classes.Add("scopeRow");
+        border.PointerPressed += (_, _) =>
+        {
+            (ScopeButton.Flyout as Flyout)?.Hide();
+            _dialogManager.SetCollectionScope(collectionId);
+            RefreshScopeSelector();
+        };
+        return border;
+    }
+
+    private Border BuildScopeManageRow()
+    {
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+        content.Children.Add(new TextBlock
+        {
+            Text = "⚙",
+            FontSize = 12,
+            Foreground = Brush.Parse("#9aa1ad"),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "Manage collections in library",
+            FontSize = 11.5,
+            Foreground = Brush.Parse("#9aa1ad"),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        var border = new Border
+        {
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 7),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = content,
+        };
+        border.Classes.Add("scopeRow");
+        border.PointerPressed += async (_, _) =>
+        {
+            (ScopeButton.Flyout as Flyout)?.Hide();
+            await OpenLibraryAsync();
+        };
+        return border;
+    }
+
+    private void ApplyRetrievalNotice(RagAskResult result)
+    {
+        // Область — коллекция без проиндексированных книг: явное сообщение вместо «no relevant sources».
+        if (result.ScopeEmpty && !string.IsNullOrEmpty(result.ScopeName))
+        {
+            RetrievalNoticeText.Text = $"the '{result.ScopeName}' collection has no indexed sources yet";
             return;
+        }
 
-        var tag = (ScopeCombo.SelectedItem as ComboBoxItem)?.Tag;
-        _dialogManager.SetScope(tag is int id ? new[] { id } : Array.Empty<int>());
-    }
-
-    private void ApplyRetrievalNotice(RetrievalState state)
-    {
-        RetrievalNoticeText.Text = state switch
+        RetrievalNoticeText.Text = result.Retrieval switch
         {
             RetrievalState.Skipped => "retrieval skipped · query too short",
             RetrievalState.NoneFound => "no relevant sources found",
@@ -237,12 +361,22 @@ public partial class RagWindow : Window
 
     private async void SourcesButton_OnClick(object? sender, RoutedEventArgs e)
     {
+        await OpenLibraryAsync();
+    }
+
+    /// <summary>
+    /// Открывает окно библиотеки источников и обновляет таблетку области поиска после закрытия.
+    /// </summary>
+    private async Task OpenLibraryAsync()
+    {
         try
         {
             if (_libraryManager == null)
                 return;
 
             await new SourceLibraryWindow(_libraryManager).ShowDialog(this);
+            // Коллекции/состав могли измениться — пересобираем меню области поиска.
+            RefreshScopeSelector();
         }
         catch (Exception exception)
         {
@@ -373,6 +507,33 @@ public partial class RagWindow : Window
         var texts = new StackPanel();
         texts.Children.Add(question);
         texts.Children.Add(snippet);
+        // Бейдж коллекции, к которой был ограничен ретрив обмена (по мокапу) — цветной квадрат + имя.
+        if (exchange != null && !string.IsNullOrEmpty(exchange.ScopeName))
+        {
+            var badge = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 5,
+                Margin = new Thickness(0, 3, 0, 0),
+            };
+            badge.Children.Add(new Border
+            {
+                Width = 7,
+                Height = 7,
+                CornerRadius = new CornerRadius(2),
+                Background = string.IsNullOrEmpty(exchange.ScopeColor) ? RowMutedBrush : Brush.Parse(exchange.ScopeColor),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            badge.Children.Add(new TextBlock
+            {
+                Text = Truncate(exchange.ScopeName, 24),
+                FontSize = 10,
+                Foreground = Brush.Parse("#8b929e"),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+            texts.Children.Add(badge);
+        }
         Grid.SetColumn(texts, 1);
 
         var time = new TextBlock
@@ -616,10 +777,9 @@ public partial class RagWindow : Window
         _summaryCts = new CancellationTokenSource();
 
         SetBusy(RagPhase.Retrieving);
-        // Предыдущий ответ не очищаем на время генерации — прогресс виден по статусу
-        // «retrieving…/generating…»; Answer заменяется только готовым результатом (или ошибкой).
-        _liveSources = Array.Empty<KnowledgeChunk>();
-        RenderSources(Array.Empty<KnowledgeChunk>());
+        // Ни ответ, ни источники не очищаем на время генерации — прогресс виден по статусу
+        // «retrieving…/generating…»; Answer и Sources заменяются только готовым результатом (или ошибкой).
+        // Раньше источники гасились здесь, и область моргала: список → пустая плашка → новый список.
         RetrievalNoticeText.Text = string.Empty;
 
         try
@@ -650,7 +810,7 @@ public partial class RagWindow : Window
                 PromptBox.Text = question;
             }
 
-            ApplyRetrievalNotice(result.Retrieval);
+            ApplyRetrievalNotice(result);
             ReloadHistory();
             RefreshScopeSelector();
             UpdateContextIndicator();
@@ -865,6 +1025,7 @@ public partial class RagWindow : Window
             Foreground = Brush.Parse("#6b7280"),
             FontFamily = MonoFont,
             Margin = new Thickness(0, 2, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var titles = new StackPanel();
         titles.Children.Add(title);
@@ -1045,6 +1206,9 @@ public partial class RagWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(12, 11),
+            // Карточка всегда во всю ширину панели: длинный заголовок переносится в звёздной колонке
+            // и не растягивает плашку шире остальных.
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Child = inner,
         };
     }

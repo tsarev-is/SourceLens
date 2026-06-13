@@ -5,8 +5,8 @@
         mc:Ignorable="d"
         x:Class="SourceLens.Windows.SourceLibraryWindow"
         Title="Source library"
-        Width="620"
-        Height="560"
+        Width="820"
+        Height="580"
         CanResize="False"
         Background="#1a1d23"
         RequestedThemeVariant="Dark"
@@ -31,7 +31,7 @@
             </Setter>
         </Style>
 
-        <!-- Bordered secondary button (Done) -->
+        <!-- Bordered secondary button (Done / Create / Cancel) -->
         <Style Selector="Button.chip">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="#cdd3dc"/>
@@ -55,6 +55,49 @@
         <Style Selector="Button.cardDelete:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="#26E5534B"/>
             <Setter Property="Foreground" Value="#e5534b"/>
+        </Style>
+
+        <!-- Collection sidebar row hover -->
+        <Style Selector="Border.collectionRow:pointerover">
+            <Setter Property="Background" Value="#20242c"/>
+        </Style>
+        <!-- Collection delete cross: hover red -->
+        <Style Selector="Button.collDelete:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#26E5534B"/>
+            <Setter Property="Foreground" Value="#e5534b"/>
+        </Style>
+
+        <!-- Dark inline text input (new collection name) -->
+        <Style Selector="TextBox.dark">
+            <Setter Property="Background" Value="#101216"/>
+            <Setter Property="Foreground" Value="#e6e8ec"/>
+            <Setter Property="CaretBrush" Value="#e6e8ec"/>
+            <Setter Property="BorderBrush" Value="#2a2e37"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="9,6"/>
+        </Style>
+        <Style Selector="TextBox.dark:focus /template/ Border#PART_BorderElement">
+            <Setter Property="BorderBrush" Value="#3a6abf"/>
+        </Style>
+
+        <!-- Membership chip (card 'Collections' dropdown) -->
+        <Style Selector="Button.memberChip">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#9aa1ad"/>
+            <Setter Property="BorderBrush" Value="#2f3441"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="9,4"/>
+        </Style>
+        <Style Selector="Button.memberChip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#222732"/>
+            <Setter Property="Foreground" Value="#cdd3dc"/>
+        </Style>
+        <Style Selector="Border.memberRow:pointerover">
+            <Setter Property="Background" Value="#222732"/>
         </Style>
     </Window.Styles>
 
@@ -88,13 +131,55 @@
             </Grid>
         </Border>
 
-        <Panel>
-            <TextBlock x:Name="EmptyText" Text="No sources indexed yet" IsVisible="False"
-                       FontSize="12.5" Foreground="#454c58"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            <ScrollViewer Padding="18,16" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                <StackPanel x:Name="DocsPanel" Spacing="8"/>
-            </ScrollViewer>
-        </Panel>
+        <!-- COLLECTIONS sidebar + DOCUMENTS panel -->
+        <Grid ColumnDefinitions="208,*">
+
+            <!-- left: collections -->
+            <Border Grid.Column="0" Background="#15181d" BorderBrush="#23262e" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Collections" FontSize="9.5" FontWeight="Bold"
+                               LetterSpacing="0.6" Foreground="#5b626e" Margin="16,15,16,8"/>
+
+                    <!-- add-new-collection footer -->
+                    <StackPanel DockPanel.Dock="Bottom" Margin="12,8,12,14">
+                        <Button x:Name="NewCollectionButton" Click="NewCollectionButton_OnClick"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Background="Transparent" Foreground="#7a818d" BorderBrush="#2f3441"
+                                BorderThickness="1" CornerRadius="7" FontSize="12" Padding="0,7"
+                                Content="+ New collection"/>
+                        <StackPanel x:Name="NewCollectionForm" IsVisible="False" Spacing="7">
+                            <TextBox x:Name="NewCollectionBox" Classes="dark" Watermark="Collection name"
+                                     KeyDown="NewCollectionBox_OnKeyDown"/>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="7">
+                                <Button x:Name="CreateCollectionButton" Grid.Column="0" Classes="accent" Height="29"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Content="Create" Click="CreateCollectionButton_OnClick"/>
+                                <Button x:Name="CancelCollectionButton" Grid.Column="1" Classes="chip" Height="29"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Content="Cancel" Click="CancelCollectionButton_OnClick"/>
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="CollectionsPanel" Margin="8,0,8,8" Spacing="1"/>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- right: documents -->
+            <DockPanel Grid.Column="1">
+                <TextBlock x:Name="DocsHeaderText" DockPanel.Dock="Top" FontSize="12.5" FontWeight="SemiBold"
+                           Foreground="#dfe3ea" Margin="18,16,18,10"/>
+                <Panel>
+                    <TextBlock x:Name="EmptyText" Text="No sources indexed yet" IsVisible="False"
+                               FontSize="12.5" Foreground="#454c58"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <ScrollViewer Padding="18,0,18,16" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="DocsPanel" Spacing="8"/>
+                    </ScrollViewer>
+                </Panel>
+            </DockPanel>
+        </Grid>
     </DockPanel>
 </Window>

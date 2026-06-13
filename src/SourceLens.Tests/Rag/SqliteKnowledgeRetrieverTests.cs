@@ -58,7 +58,9 @@ public class SqliteKnowledgeRetrieverTests
     private SqliteKnowledgeRetriever Retriever(StubEmbedder embedder, RetrievalOptions? options = null)
         => new(Context, embedder, options ?? Ranking);
 
-    /// <summary>Сеет корпус; ординалы в пределах книги идут с шагом 5 — без смежности (схлопывание не срабатывает).</summary>
+    /// <summary>
+    /// Сеет корпус; ординалы в пределах книги идут с шагом 5 — без смежности (схлопывание не срабатывает).
+    /// </summary>
     private async Task SeedCorpus(string modelId, int dim, params (string title, float[] vec, string text, string loc)[] chunks)
     {
         await using var ctx = Context();
