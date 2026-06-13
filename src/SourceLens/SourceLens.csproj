@@ -8,7 +8,7 @@
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <ApplicationManifest>app.manifest</ApplicationManifest>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-        <AssemblyVersion>1.0.0</AssemblyVersion>
+        <VersionPrefix>1.1.0</VersionPrefix>
         <!-- AVLN3001: окна конструируются с зависимостями (composition root), parameterless-ctor для runtime-XAML-loader не нужен. -->
         <NoWarn>$(NoWarn);AVLN3001</NoWarn>
     </PropertyGroup>

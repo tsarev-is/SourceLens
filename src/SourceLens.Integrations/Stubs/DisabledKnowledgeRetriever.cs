@@ -8,7 +8,7 @@ namespace SourceLens.Integrations.Stubs;
 /// </summary>
 public class DisabledKnowledgeRetriever : IKnowledgeRetriever
 {
-    public Task<KnowledgeChunk[]> Retrieve(string query, int topK, CancellationToken ct = default)
+    public Task<KnowledgeChunk[]> Retrieve(string query, int topK, RetrievalScope? scope = null, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(Array.Empty<KnowledgeChunk>());

@@ -239,6 +239,12 @@
                             <Rectangle Classes="wave" Width="3" Height="16" Fill="#e5534b" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
                             <TextBlock Text="Listening…" FontSize="11.5" Foreground="#e08a85" Margin="7,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
+                        <StackPanel x:Name="ScopePanel" Grid.Column="2" Orientation="Horizontal" Spacing="7"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0" IsVisible="False">
+                            <TextBlock Text="scope:" FontSize="11" Foreground="#5b626e" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ScopeCombo" MinWidth="150" MaxWidth="240" FontSize="12"
+                                      VerticalAlignment="Center" SelectionChanged="ScopeCombo_OnSelectionChanged"/>
+                        </StackPanel>
                         <TextBlock Grid.Column="3" Text="Ctrl / Cmd + Enter" FontSize="11" Foreground="#5b626e"
                                    FontFamily="Consolas,Menlo,monospace" VerticalAlignment="Center" Margin="0,0,10,0"/>
                         <Button x:Name="SendButton" Grid.Column="4" Classes="accent" Height="33" Padding="18,0"
@@ -304,6 +310,7 @@
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
                         <TextBlock Classes="section" Text="SOURCES" VerticalAlignment="Center"/>
                         <TextBlock x:Name="SourcesCountText" Text="none yet" FontSize="11" Foreground="#5b626e" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="RetrievalNoticeText" Text="" FontSize="11" Foreground="#e3b341" VerticalAlignment="Center"/>
                     </StackPanel>
                     <Panel>
                         <Grid x:Name="SourcesEmptyPanel" MinHeight="80">

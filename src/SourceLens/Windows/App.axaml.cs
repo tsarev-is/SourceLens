@@ -190,8 +190,12 @@ public partial class App : Application
             Version = rag.ChunkerVersion,
             WindowSize = rag.ChunkSize,
             Overlap = rag.ChunkOverlap,
+            // Бюджет тела чанка — ниже capacity эмбеддера, с запасом на embed-префикс "passage: " и BOS/EOS.
+            MaxTokens = Math.Max(16, rag.LocalOnnx.MaxSequenceLength - 32),
         };
-        var chunker = new SlidingWordChunker(chunkerOptions);
+        // Если эмбеддер умеет считать токены (LocalOnnx), чанкер режет по токенам, а не по словам —
+        // иначе для не-латиницы 250 слов давали 550–720 токенов и хвост чанка не попадал в вектор.
+        var chunker = new SlidingWordChunker(chunkerOptions, embedder as ITokenCounter);
         var loaders = new IDocumentLoader[] { new PdfDocumentLoader(), new EpubDocumentLoader(), new TextDocumentLoader() };
         return new BookIngestService(getContext, loaders, chunker, embedder, chunkerOptions);
     }
@@ -203,6 +207,12 @@ public partial class App : Application
         {
             TopK = options.Rag.TopK,
             MinQueryLength = options.Rag.MinQueryLength,
+            MinScore = options.Rag.MinScore,
+            MaxRelativeScoreDrop = options.Rag.MaxRelativeScoreDrop,
+            CandidatePoolSize = options.Rag.CandidatePoolSize,
+            MmrLambda = options.Rag.MmrLambda,
+            HybridSearch = options.Rag.HybridSearch,
+            RewriteFollowUpQueries = options.Rag.RewriteFollowUpQueries,
         };
 
         if (!options.Rag.Enabled)
@@ -212,11 +222,13 @@ public partial class App : Application
         }
 
         var embedder = BuildEmbedder(options.Rag, downloader);
-        var retriever = new SqliteKnowledgeRetriever(getContext, embedder);
+        var retriever = new SqliteKnowledgeRetriever(getContext, embedder, retrievalOptions);
         var library = new SourceLibraryManager(
             getContext,
             BuildIngestService(getContext, embedder, options.Rag),
             options.Rag.BooksFolder);
+        // Индексация/удаление книг меняет корпус — сбрасываем кэш векторов ретривера.
+        library.Changed += retriever.InvalidateCache;
         library.QueueFolderScan();
         return (retriever, retrievalOptions, library);
     }

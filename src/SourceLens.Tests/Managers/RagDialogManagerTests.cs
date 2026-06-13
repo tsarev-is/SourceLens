@@ -363,7 +363,8 @@ public class RagDialogManagerTests
         Assert.That(_llm.LastPrompt, Does.Contain("Q: prior question"));
         Assert.That(_llm.LastPrompt, Does.Contain("A: prior answer"));
         Assert.That(_llm.LastPrompt, Does.Contain("retrieved-passage"));
-        Assert.That(_retriever.Calls, Is.EqualTo(new[] { ("What does the law say?", 4) }));
+        Assert.That(_retriever.Calls, Is.EqualTo(new[] { ("the answer [1]", 4) }));
+        Assert.That(_retriever.Scopes.Single(), Is.Not.Null);
         Assert.That(progress.Phases, Is.EqualTo(new[] { RagPhase.Retrieving, RagPhase.Generating }));
         Assert.That(result.Answer, Is.EqualTo("the answer [1]"));
 
@@ -383,7 +384,114 @@ public class RagDialogManagerTests
 
         Assert.That(_retriever.Calls, Is.Empty);
         Assert.That(result.Sources, Is.Empty);
+        Assert.That(result.Retrieval, Is.EqualTo(RetrievalState.Skipped));
         Assert.That(_llm.LastPrompt, Does.Not.Contain("<<<REFERENCE_MATERIALS"));
         Assert.That(manager.GetExchanges(manager.CurrentSession.Id).Length, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Ask_NoHistory_RetrievesWithRawQuestion_NoRewrite()
+    {
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "x", Score = 0.9f } };
+        var manager = CreateManager();
+
+        await manager.Ask("What is entropy in thermodynamics?");
+
+        Assert.That(_retriever.Calls.Single().Query, Is.EqualTo("What is entropy in thermodynamics?"),
+            "первый вопрос диалога не переписывается");
+    }
+
+    [Test]
+    public async Task Ask_FollowUp_RewritesQueryAsStandaloneUsingHistory()
+    {
+        var session = await Seed(("prior question", "prior answer"));
+        var llm = new DelegatingLlm(prompt => Task.FromResult(
+            prompt.Contains("self-contained search query") ? "standalone rewritten query" : "final answer"));
+        var manager = new RagDialogManager(() => Global.CreateContext(_builder), () => llm, _retriever,
+            new RetrievalOptions { TopK = 4, MinQueryLength = 1 }, new RagDialogOptions());
+        manager.ResumeSession(session.Id);
+
+        await manager.Ask("and then?");
+
+        Assert.That(_retriever.Calls.Single().Query, Is.EqualTo("standalone rewritten query"),
+            "уточняющий вопрос переписан в самодостаточный запрос перед ретривом");
+    }
+
+    [Test]
+    public async Task Ask_FollowUp_RewriteDisabled_UsesHeuristicWithoutExtraLlmCall()
+    {
+        var session = await Seed(("prior question", "prior answer"));
+        var calls = 0;
+        var llm = new DelegatingLlm(_ => { calls++; return Task.FromResult("final answer"); });
+        var manager = new RagDialogManager(() => Global.CreateContext(_builder), () => llm, _retriever,
+            new RetrievalOptions { TopK = 4, MinQueryLength = 1, RewriteFollowUpQueries = false },
+            new RagDialogOptions());
+        manager.ResumeSession(session.Id);
+
+        await manager.Ask("and then?");
+
+        Assert.That(_retriever.Calls.Single().Query, Is.EqualTo("prior question and then?"),
+            "переписывание выключено → эвристика: предыдущий вопрос + текущий");
+        Assert.That(calls, Is.EqualTo(1), "только вызов ответа, без отдельного вызова переписывания");
+    }
+
+    [Test]
+    public async Task Ask_RetrievalFindsNothing_ReportsNoneFound_AndPromptSaysSo()
+    {
+        _retriever.Chunks = Array.Empty<KnowledgeChunk>();
+        var manager = CreateManager();
+
+        var result = await manager.Ask("a sufficiently long question with no matches");
+
+        Assert.That(result.Retrieval, Is.EqualTo(RetrievalState.NoneFound));
+        Assert.That(result.Sources, Is.Empty);
+        Assert.That(_llm.LastPrompt, Does.Contain("none found"));
+    }
+
+    [Test]
+    public async Task Ask_FoundSources_ReportsFound()
+    {
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "hit", Score = 0.9f } };
+        var manager = CreateManager();
+
+        var result = await manager.Ask("a sufficiently long question");
+
+        Assert.That(result.Retrieval, Is.EqualTo(RetrievalState.Found));
+    }
+
+    [Test]
+    public async Task SetScope_PersistsPerSession_AndIsPassedToRetriever()
+    {
+        _retriever.Chunks = Array.Empty<KnowledgeChunk>();
+        var manager = CreateManager();
+        manager.SetScope(new[] { 7, 9 });
+
+        Assert.That(manager.CurrentScopeDocumentIds, Is.EquivalentTo(new[] { 7, 9 }));
+
+        await manager.Ask("a sufficiently long question");
+
+        var scope = _retriever.Scopes.Single();
+        Assert.That(scope!.DocumentIds, Is.EquivalentTo(new[] { 7, 9 }));
+
+        // Сброс на всю библиотеку.
+        manager.SetScope(Array.Empty<int>());
+        Assert.That(manager.CurrentScope.IsWholeLibrary, Is.True);
+    }
+
+    [Test]
+    public async Task DeleteSession_RemovesPersistedScopeSetting()
+    {
+        var manager = CreateManager();
+        var sessionId = manager.CurrentSession.Id;
+        manager.SetScope(new[] { 3 });
+
+        using (var ctx = Global.CreateContext(_builder))
+            Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.EqualTo("3"));
+
+        await manager.DeleteSession(sessionId);
+
+        using (var ctx = Global.CreateContext(_builder))
+            Assert.That(ctx.GetSetting("rag.scope." + sessionId), Is.Null,
+                "scope-настройка удалённой сессии не должна копиться в app_settings");
     }
 }

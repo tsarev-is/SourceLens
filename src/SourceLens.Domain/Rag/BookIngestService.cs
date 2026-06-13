@@ -56,6 +56,8 @@ public class BookIngestService : IBookIngestor
 
             foreach (var stale in existing)
             {
+                // Чистим FTS-строки пока чанки ещё в БД (RemoveRange отложен до SaveChanges).
+                await ctx.RemoveDocumentFts(stale.Id, ct);
                 var chunkSet = ctx.Set<BookChunkItem>().Where(c => c.DocumentId == stale.Id);
                 ctx.Set<BookChunkItem>().RemoveRange(chunkSet);
                 ctx.Set<BookDocumentItem>().Remove(stale);
@@ -115,6 +117,9 @@ public class BookIngestService : IBookIngestor
                 }
             }
             await ctx.SaveChangesAsync(ct);
+
+            // Наполняем лексический индекс по уже сохранённым (с реальными id) чанкам документа.
+            await ctx.RebuildDocumentFts(document.Id, ct);
         }
 
         Logger.Info("Indexed {0}: {1} chunks", filePath, chunks.Count);

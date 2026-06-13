@@ -6,8 +6,10 @@ using SourceLens.Integrations.Models;
 
 namespace SourceLens.Integrations.Embeddings;
 
-public class LocalOnnxEmbedder : IEmbedder, IDisposable
+public class LocalOnnxEmbedder : IEmbedder, IDisposable, ITokenCounter
 {
+    private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+
     private const string InputIdsName = "input_ids";
     private const string AttentionMaskName = "attention_mask";
     private const string LastHiddenStateOutput = "last_hidden_state";
@@ -82,10 +84,23 @@ public class LocalOnnxEmbedder : IEmbedder, IDisposable
         return Task.FromResult(pooled);
     }
 
+    /// <summary>
+    /// Число токенов тела (без BOS/EOS и без embed-префикса) — той же токенизацией, что и <see cref="Embed"/>.
+    /// Чанкер вызывает это пословно, чтобы держать чанк под capacity модели для любого языка.
+    /// </summary>
+    public int CountTokens(string text)
+    {
+        return _tokenizer.Value.EncodeToIds(text ?? string.Empty).Count;
+    }
+
     private long[] BuildIdsWithSpecials(IReadOnlyList<int> rawIds)
     {
         var max = Math.Max(2, _options.MaxSequenceLength);
         var bodyCapacity = max - 2;
+        if (rawIds.Count > bodyCapacity)
+            Logger.Warn(
+                "Embedding input truncated: {0} tokens exceed model capacity {1} (incl. BOS/EOS); the chunk tail is not represented in its vector. Reduce Rag.ChunkSize.",
+                rawIds.Count, max);
         var bodyCount = Math.Min(rawIds.Count, bodyCapacity);
         var ids = new long[bodyCount + 2];
         ids[0] = _options.BosTokenId;

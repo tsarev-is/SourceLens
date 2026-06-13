@@ -9,9 +9,12 @@ public class StubRetriever : IKnowledgeRetriever
 
     public List<(string Query, int TopK)> Calls { get; } = new();
 
-    public Task<KnowledgeChunk[]> Retrieve(string query, int topK, CancellationToken ct = default)
+    public List<RetrievalScope?> Scopes { get; } = new();
+
+    public Task<KnowledgeChunk[]> Retrieve(string query, int topK, RetrievalScope? scope = null, CancellationToken ct = default)
     {
         Calls.Add((query, topK));
+        Scopes.Add(scope);
         return Task.FromResult(Chunks);
     }
 }

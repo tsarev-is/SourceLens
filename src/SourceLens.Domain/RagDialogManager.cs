@@ -21,6 +21,9 @@ public class RagDialogManager
     private readonly Func<AbstractLlmInferences> _getLlm;
     private readonly IKnowledgeRetriever _retriever;
     private readonly RetrievalOptions _retrievalOptions;
+    private readonly Dictionary<int, RetrievalScope> _scopeBySession = new();
+
+    private const string ScopeSettingPrefix = "rag.scope.";
 
     public RagDialogManager(Func<SourceLensContext> getContext, Func<AbstractLlmInferences> getLlm,
         IKnowledgeRetriever retriever, RetrievalOptions retrievalOptions, RagDialogOptions options)
@@ -142,18 +145,41 @@ public class RagDialogManager
         // и по завершении этот диалог снова станет текущим.
         var sessionId = CurrentSession.Id;
 
-        progress?.Report(RagPhase.Retrieving);
-        var sources = question.Length >= _retrievalOptions.MinQueryLength
-            ? await _retriever.Retrieve(question, _retrievalOptions.TopK, ct)
-            : Array.Empty<KnowledgeChunk>();
+        var priorPairs = GetContextPairs(sessionId);
+        var priorContext = string.Join("\n", priorPairs);
 
-        var priorContext = string.Join("\n", GetContextPairs(sessionId));
-        Logger.Info("RAG ask: question {0} chars, {1} sources, prior context {2} chars", question.Length, sources.Length, priorContext.Length);
+        progress?.Report(RagPhase.Retrieving);
+
+        var retrievalRan = question.Length >= _retrievalOptions.MinQueryLength;
+        var sources = Array.Empty<KnowledgeChunk>();
+        if (retrievalRan)
+        {
+            // Уточняющий вопрос ("а что было дальше?") сам по себе даёт бессмысленный вектор —
+            // переписываем его в самодостаточный запрос с опорой на историю диалога.
+            var retrievalQuery = priorPairs.Length > 0
+                ? await BuildStandaloneQuery(question, priorContext, sessionId)
+                : question;
+            // priorPairs.Length == 0 — первый вопрос диалога, переписывать нечего.
+            sources = await _retriever.Retrieve(retrievalQuery, _retrievalOptions.TopK, GetScope(sessionId), ct);
+        }
+
+        var state = !retrievalRan
+            ? RetrievalState.Skipped
+            : sources.Length > 0
+                ? RetrievalState.Found
+                : RetrievalState.NoneFound;
+
+        Logger.Info("RAG ask: question {0} chars, retrieval {1}, {2} sources, prior context {3} chars",
+            question.Length, state, sources.Length, priorContext.Length);
 
         ct.ThrowIfCancellationRequested();
         progress?.Report(RagPhase.Generating);
+
+        // null — ретрив пропущен (короткий вопрос): без блока источников.
+        // Пустой не-null — ретрив выполнен, но ничего не найдено: явный «no sources» в промпте.
+        IReadOnlyList<KnowledgeChunk>? materials = retrievalRan ? sources : null;
         string answer;
-        using (LlmContext.WithReferenceMaterials(sources))
+        using (LlmContext.WithReferenceMaterials(materials))
             answer = await _getLlm().AskWithRag(question, priorContext);
 
         await using var ctx = _getContext();
@@ -166,7 +192,89 @@ public class RagDialogManager
         await ctx.SaveChangesAsync(CancellationToken.None);
         CurrentSession = session;
 
-        return new RagAskResult { Answer = answer, Sources = sources };
+        return new RagAskResult { Answer = answer, Sources = sources, Retrieval = state };
+    }
+
+    /// <summary>
+    /// LLM-переписывание уточняющего вопроса в самодостаточный запрос; при сбое (или когда
+    /// переписывание выключено в настройках) — дешёвая эвристика (конкатенация предыдущего вопроса
+    /// пользователя). Не валит весь ответ из-за переписывания.
+    /// </summary>
+    private async Task<string> BuildStandaloneQuery(string question, string priorContext, int sessionId)
+    {
+        if (!_retrievalOptions.RewriteFollowUpQueries)
+            return HeuristicStandaloneQuery(question, sessionId);
+
+        try
+        {
+            return await _getLlm().RewriteFollowUpQuery(question, priorContext);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Follow-up query rewrite failed; using heuristic fallback");
+            return HeuristicStandaloneQuery(question, sessionId);
+        }
+    }
+
+    private string HeuristicStandaloneQuery(string question, int sessionId)
+    {
+        var previous = LastQuestion(sessionId);
+        return string.IsNullOrWhiteSpace(previous) ? question : $"{previous} {question}";
+    }
+
+    private string? LastQuestion(int sessionId)
+    {
+        using var ctx = _getContext();
+        return ctx.GetRagExchanges(sessionId).LastOrDefault()?.Question;
+    }
+
+    // ---------- Область поиска (per-session) ----------
+
+    /// <summary>Область поиска текущей сессии: пустой <see cref="RetrievalScope.DocumentIds"/> — вся библиотека.</summary>
+    public RetrievalScope CurrentScope => GetScope(CurrentSession.Id);
+
+    /// <summary>
+    /// Идентификаторы книг, по которым ограничен поиск текущей сессии (пусто — вся библиотека).
+    /// </summary>
+    public IReadOnlyCollection<int> CurrentScopeDocumentIds =>
+        GetScope(CurrentSession.Id).DocumentIds ?? Array.Empty<int>();
+
+    /// <summary>Задаёт область поиска для текущей сессии и сохраняет её (per-session).</summary>
+    public void SetScope(IReadOnlyCollection<int> documentIds)
+    {
+        var sessionId = CurrentSession.Id;
+        var ids = documentIds.Distinct().ToArray();
+        _scopeBySession[sessionId] = ids.Length == 0
+            ? RetrievalScope.WholeLibrary
+            : new RetrievalScope { DocumentIds = ids };
+
+        using var ctx = _getContext();
+        ctx.SetSetting(ScopeSettingPrefix + sessionId, string.Join(",", ids));
+        ctx.SaveChanges();
+    }
+
+    private RetrievalScope GetScope(int sessionId)
+    {
+        if (_scopeBySession.TryGetValue(sessionId, out var cached))
+            return cached;
+
+        using var ctx = _getContext();
+        var scope = ParseScope(ctx.GetSetting(ScopeSettingPrefix + sessionId));
+        _scopeBySession[sessionId] = scope;
+        return scope;
+    }
+
+    private static RetrievalScope ParseScope(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return RetrievalScope.WholeLibrary;
+
+        var ids = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => int.TryParse(s, out var id) ? id : (int?)null)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .ToArray();
+        return ids.Length == 0 ? RetrievalScope.WholeLibrary : new RetrievalScope { DocumentIds = ids };
     }
 
     private async Task HideSession(SourceLensContext ctx, int sessionId)
@@ -176,6 +284,9 @@ public class RagDialogManager
             return;
 
         session.MarkDeleted();
+        // Область поиска привязана к сессии — удаляем её настройку, чтобы ключи rag.scope.* не копились.
+        ctx.DeleteSetting(ScopeSettingPrefix + sessionId);
+        _scopeBySession.Remove(sessionId);
         await ctx.SaveChangesAsync();
 
         if (CurrentSession.Id == sessionId)

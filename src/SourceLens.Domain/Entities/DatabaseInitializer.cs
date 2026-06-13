@@ -51,5 +51,11 @@ public static class DatabaseInitializer
 
         context.Database.ExecuteSqlRaw(
             """CREATE UNIQUE INDEX IF NOT EXISTS "IX_rag_exchanges_RagSessionId_Id" ON "rag_exchanges" ("RagSessionId", "Id");""");
+
+        // Лексический канал ретрива: FTS5 над текстом чанков (rowid = book_chunks.Id).
+        // EnsureCreated не создаёт виртуальные таблицы, поэтому заводим идемпотентно здесь;
+        // наполняется в BookIngestService.RebuildDocumentFts при ингесте/переиндексации.
+        context.Database.ExecuteSqlRaw(
+            $"""CREATE VIRTUAL TABLE IF NOT EXISTS "{SourceLensContext.FtsTableName}" USING fts5(Text);""");
     }
 }

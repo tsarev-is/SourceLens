@@ -14,6 +14,20 @@ public abstract class AbstractLlmInferences
         return (await Question(prompt))?.Trim() ?? string.Empty;
     }
 
+    /// <summary>
+    /// Переписывает уточняющий вопрос в самодостаточный поисковый запрос с учётом истории диалога.
+    /// Пустая история — вопрос возвращается как есть. Пустой результат модели — fallback на исходный вопрос.
+    /// </summary>
+    public virtual async Task<string> RewriteFollowUpQuery(string question, string dialogHistory)
+    {
+        if (string.IsNullOrWhiteSpace(dialogHistory))
+            return question;
+
+        var prompt = PromptCatalog.RewriteQuery(question, dialogHistory);
+        var rewritten = (await Question(prompt))?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(rewritten) ? question : rewritten;
+    }
+
     public virtual async Task<string> SummariseChunk(string text)
     {
         if (string.IsNullOrWhiteSpace(text))

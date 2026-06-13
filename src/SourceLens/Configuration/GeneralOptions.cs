@@ -43,6 +43,14 @@ public class GeneralOptions
                 throw new DataException("Rag.BooksFolder must be set when Rag.Enabled=true");
             if (Rag.TopK <= 0)
                 throw new DataException("Rag.TopK must be positive");
+            if (Rag.MinScore is < 0 or > 1)
+                throw new DataException("Rag.MinScore must be in [0, 1]");
+            if (Rag.MaxRelativeScoreDrop is < 0 or > 1)
+                throw new DataException("Rag.MaxRelativeScoreDrop must be in [0, 1]");
+            if (Rag.CandidatePoolSize < Rag.TopK)
+                throw new DataException("Rag.CandidatePoolSize must be at least Rag.TopK");
+            if (Rag.MmrLambda is < 0 or > 1)
+                throw new DataException("Rag.MmrLambda must be in [0, 1]");
             if (Rag.MinQueryLength < 0)
                 throw new DataException("Rag.MinQueryLength must be non-negative");
             if (Rag.ChunkSize <= 0)
@@ -155,24 +163,55 @@ public class GeneralOptions
         public int TopK { get; set; } = 5;
 
         /// <summary>
+        /// Абсолютный порог косинусного сходства; чанки ниже отбрасываются. 0 — выключен.
+        /// </summary>
+        public float MinScore { get; set; }
+
+        /// <summary>
+        /// Относительный порог отсечения хвоста (best − value). 0 — выключен.
+        /// </summary>
+        public float MaxRelativeScoreDrop { get; set; }
+
+        /// <summary>
+        /// Размер пула кандидатов на канал (dense/BM25) до слияния и MMR.
+        /// </summary>
+        public int CandidatePoolSize { get; set; } = 50;
+
+        /// <summary>
+        /// Баланс релевантность/разнообразие в MMR (1.0 — только релевантность).
+        /// </summary>
+        public float MmrLambda { get; set; } = 0.7f;
+
+        /// <summary>
+        /// Гибридный поиск: лексический FTS5/BM25 + плотный, слияние через RRF.
+        /// </summary>
+        public bool HybridSearch { get; set; } = true;
+
+        /// <summary>
+        /// Переписывать follow-up вопрос в самодостаточный запрос отдельным вызовом LLM (точнее, но
+        /// удваивает задержку для каждого уточняющего вопроса). false — дешёвая эвристика.
+        /// </summary>
+        public bool RewriteFollowUpQueries { get; set; } = true;
+
+        /// <summary>
         /// Минимальная длина вопроса для запуска retrieval; короче — без источников.
         /// </summary>
-        public int MinQueryLength { get; set; } = 20;
+        public int MinQueryLength { get; set; } = 3;
 
         /// <summary>
         /// Версия чанкера; изменение ведёт к переиндексации.
         /// </summary>
-        public string ChunkerVersion { get; set; } = "v1";
+        public string ChunkerVersion { get; set; } = "v2";
 
         /// <summary>
-        /// Размер чанка в словах.
+        /// Размер чанка в словах (держим под лимитом токенов эмбеддера ~512).
         /// </summary>
-        public int ChunkSize { get; set; } = 500;
+        public int ChunkSize { get; set; } = 250;
 
         /// <summary>
         /// Перекрытие соседних чанков в словах.
         /// </summary>
-        public int ChunkOverlap { get; set; } = 100;
+        public int ChunkOverlap { get; set; } = 50;
 
         /// <summary>
         /// Максимум пар Q/A в контексте диалога; 0 — контекст отключён (история всё равно пишется).

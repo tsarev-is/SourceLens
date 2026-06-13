@@ -125,4 +125,58 @@ public class SlidingWordChunkerTests
         Assert.Throws<ArgumentException>(() => new SlidingWordChunker(new ChunkerOptions { WindowSize = 5, Overlap = 5 }));
         Assert.Throws<ArgumentException>(() => new SlidingWordChunker(new ChunkerOptions { WindowSize = 5, Overlap = 6 }));
     }
+
+    [Test]
+    public void TokenCounterWithNonPositiveMaxTokens_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new SlidingWordChunker(new ChunkerOptions { WindowSize = 5, Overlap = 1, MaxTokens = 0 }, new FixedTokenCounter(1)));
+    }
+
+    [Test]
+    public async Task TokenBudget_FlushesBeforeWordWindow()
+    {
+        // 3 tokens/word, budget 10 → chunk closes once running tokens reach the budget (after the 4th word: 12 ≥ 10).
+        var chunker = new SlidingWordChunker(
+            new ChunkerOptions { WindowSize = 100, Overlap = 0, MaxTokens = 10 },
+            new FixedTokenCounter(3));
+
+        var chunks = await Collect(chunker, Segments(Seg("a b c d e f g h", "p.1")));
+
+        Assert.That(chunks.Select(c => c.Text), Is.EqualTo(new[] { "a b c d", "e f g h" }));
+    }
+
+    [Test]
+    public async Task TokenBudget_RespectsOverlapAcrossChunks()
+    {
+        // Overlap words are carried into the next buffer's running token total, so the budget stays honoured.
+        var chunker = new SlidingWordChunker(
+            new ChunkerOptions { WindowSize = 100, Overlap = 1, MaxTokens = 10 },
+            new FixedTokenCounter(3));
+
+        var chunks = await Collect(chunker, Segments(Seg("a b c d e f g", "p.1")));
+
+        // 1st: a b c d (12). Carry "d" (3). 2nd accumulates d e f g → flush at "d e f g" (12). Carry "g". Tail "g" only is carryover → no phantom chunk.
+        Assert.That(chunks.Select(c => c.Text), Is.EqualTo(new[] { "a b c d", "d e f g" }));
+    }
+
+    [Test]
+    public async Task WordWindowStillCapsTokenSparseText()
+    {
+        // 1 token/word never reaches the big budget, so the word window remains the limit (back-compat behaviour).
+        var chunker = new SlidingWordChunker(
+            new ChunkerOptions { WindowSize = 4, Overlap = 2, MaxTokens = 1000 },
+            new FixedTokenCounter(1));
+
+        var chunks = await Collect(chunker, Segments(Seg("a b c d e f g h", "p.1")));
+
+        Assert.That(chunks.Select(c => c.Text), Is.EqualTo(new[] { "a b c d", "c d e f", "e f g h" }));
+    }
+
+    private sealed class FixedTokenCounter : ITokenCounter
+    {
+        private readonly int _perWord;
+        public FixedTokenCounter(int perWord) => _perWord = perWord;
+        public int CountTokens(string text) => _perWord;
+    }
 }

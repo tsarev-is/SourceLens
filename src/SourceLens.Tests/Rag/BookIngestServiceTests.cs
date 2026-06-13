@@ -56,7 +56,7 @@ public class BookIngestServiceTests
         Assert.That(docs[0].FilePath, Is.EqualTo(_file));
         Assert.That(docs[0].EmbedderModelId, Is.EqualTo("fake-v1"));
         Assert.That(docs[0].EmbedderDimensions, Is.EqualTo(4));
-        Assert.That(docs[0].ChunkerVersion, Is.EqualTo("v1"));
+        Assert.That(docs[0].ChunkerVersion, Is.EqualTo("v2"));
         Assert.That(docs[0].ChunkCount, Is.GreaterThan(0));
 
         var chunks = await ctx.Set<BookChunkItem>().Where(c => c.DocumentId == docs[0].Id).ToArrayAsync();

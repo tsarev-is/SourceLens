@@ -71,6 +71,7 @@ public partial class RagWindow : Window
     private KnowledgeChunk[] _liveSources = Array.Empty<KnowledgeChunk>();
     private CancellationTokenSource? _summaryCts;
     private readonly Dictionary<string, string> _summaryCache = new();
+    private bool _suppressScopeEvents;
 
     public RagWindow(
         AnswerEngineManager engineManager,
@@ -95,8 +96,9 @@ public partial class RagWindow : Window
         // событие Handled) до bubbling-подписчиков, поэтому Ctrl/Cmd+Enter перехватываем на туннельной фазе.
         PromptBox.AddHandler(KeyDownEvent, PromptBox_OnKeyDown, RoutingStrategies.Tunnel);
 
-        // RAG выключен — управлять источниками нечем, кнопку прячем.
+        // RAG выключен — управлять источниками нечем, кнопку и выбор области прячем.
         SourcesButton.IsVisible = _libraryManager != null;
+        ScopePanel.IsVisible = _libraryManager != null;
 
         // TextChanged может приходить отложенно; PropertyChanged по TextProperty — синхронно.
         PromptBox.PropertyChanged += (_, args) =>
@@ -114,6 +116,7 @@ public partial class RagWindow : Window
 
         // Старт: менеджер уже создал новый пустой диалог; прошлые диалоги доступны из History.
         ReloadHistory();
+        RefreshScopeSelector();
         UpdateContextIndicator();
         RenderAnswer(string.Empty);
         RenderSources(Array.Empty<KnowledgeChunk>());
@@ -164,6 +167,72 @@ public partial class RagWindow : Window
         StatusText.Text = "Recording voice…";
         StatusDot.Fill = StatusErrorBrush;
         AnswerStatusText.Text = string.Empty;
+    }
+
+    // ---------- Область поиска (выбор книги) ----------
+
+    /// <summary>
+    /// Перестраивает дропдаун области поиска из текущей библиотеки и восстанавливает scope сессии.
+    /// Удалённая/переиндексированная книга из сохранённого scope сбрасывается на всю библиотеку.
+    /// </summary>
+    private void RefreshScopeSelector()
+    {
+        if (_libraryManager == null)
+            return;
+
+        _suppressScopeEvents = true;
+        try
+        {
+            var scopeIds = _dialogManager.CurrentScopeDocumentIds;
+            var selectedId = scopeIds.Count == 1 ? scopeIds.First() : (int?)null;
+
+            ScopeCombo.Items.Clear();
+            var allItem = new ComboBoxItem { Content = "All sources", Tag = null };
+            ScopeCombo.Items.Add(allItem);
+            ScopeCombo.SelectedItem = allItem;
+
+            var matched = false;
+            foreach (var book in _libraryManager.GetEntries()
+                         .Where(e => e.DocumentId.HasValue)
+                         .GroupBy(e => e.DocumentId!.Value)
+                         .Select(g => g.First())
+                         .OrderBy(e => e.Title, StringComparer.OrdinalIgnoreCase))
+            {
+                var item = new ComboBoxItem { Content = Truncate(book.Title, 40), Tag = book.DocumentId };
+                ScopeCombo.Items.Add(item);
+                if (selectedId.HasValue && book.DocumentId == selectedId)
+                {
+                    ScopeCombo.SelectedItem = item;
+                    matched = true;
+                }
+            }
+
+            if (selectedId.HasValue && !matched)
+                _dialogManager.SetScope(Array.Empty<int>());
+        }
+        finally
+        {
+            _suppressScopeEvents = false;
+        }
+    }
+
+    private void ScopeCombo_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressScopeEvents || _libraryManager == null)
+            return;
+
+        var tag = (ScopeCombo.SelectedItem as ComboBoxItem)?.Tag;
+        _dialogManager.SetScope(tag is int id ? new[] { id } : Array.Empty<int>());
+    }
+
+    private void ApplyRetrievalNotice(RetrievalState state)
+    {
+        RetrievalNoticeText.Text = state switch
+        {
+            RetrievalState.Skipped => "retrieval skipped · query too short",
+            RetrievalState.NoneFound => "no relevant sources found",
+            _ => string.Empty,
+        };
     }
 
     private async void SourcesButton_OnClick(object? sender, RoutedEventArgs e)
@@ -430,7 +499,9 @@ public partial class RagWindow : Window
         PromptBox.Text = string.Empty;
         RenderAnswer(string.Empty);
         RenderSources(Array.Empty<KnowledgeChunk>());
+        RetrievalNoticeText.Text = string.Empty;
         ReloadHistory();
+        RefreshScopeSelector();
         UpdateContextIndicator();
         SetReady();
     }
@@ -443,6 +514,8 @@ public partial class RagWindow : Window
         // а не последнюю/новую сессию.
         _dialogManager.ResumeSession(session.Id);
         UpdateContextIndicator();
+        RefreshScopeSelector();
+        RetrievalNoticeText.Text = string.Empty;
 
         _viewExchange = exchange;
         _viewSessionId = session.Id;
@@ -547,6 +620,7 @@ public partial class RagWindow : Window
         // «retrieving…/generating…»; Answer заменяется только готовым результатом (или ошибкой).
         _liveSources = Array.Empty<KnowledgeChunk>();
         RenderSources(Array.Empty<KnowledgeChunk>());
+        RetrievalNoticeText.Text = string.Empty;
 
         try
         {
@@ -576,7 +650,9 @@ public partial class RagWindow : Window
                 PromptBox.Text = question;
             }
 
+            ApplyRetrievalNotice(result.Retrieval);
             ReloadHistory();
+            RefreshScopeSelector();
             UpdateContextIndicator();
         }
         catch (Exception exception)
