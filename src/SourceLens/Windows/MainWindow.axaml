@@ -5,6 +5,7 @@
         mc:Ignorable="d"
         x:Class="SourceLens.Windows.MainWindow"
         Title="SourceLens · Configuration error"
+        Icon="/Assets/logo.ico"
         Background="#16181d"
         MinHeight="280"
         MinWidth="560"

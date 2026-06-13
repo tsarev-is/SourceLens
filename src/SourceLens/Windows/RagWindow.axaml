@@ -5,6 +5,7 @@
         mc:Ignorable="d"
         x:Class="SourceLens.Windows.RagWindow"
         Title="SourceLens · RAG mode"
+        Icon="/Assets/logo.ico"
         Width="1320"
         Height="848"
         MinWidth="980"

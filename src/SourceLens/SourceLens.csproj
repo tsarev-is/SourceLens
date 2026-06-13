@@ -7,6 +7,7 @@
         <Nullable>enable</Nullable>
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <ApplicationManifest>app.manifest</ApplicationManifest>
+        <ApplicationIcon>Assets/logo.ico</ApplicationIcon>
         <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
         <VersionPrefix>1.1.0</VersionPrefix>
         <!-- AVLN3001: окна конструируются с зависимостями (composition root), parameterless-ctor для runtime-XAML-loader не нужен. -->
@@ -24,6 +25,10 @@
             <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
         </PackageReference>
         <PackageReference Include="NLog" Version="5.5.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <AvaloniaResource Include="Assets\**" />
     </ItemGroup>
 
     <ItemGroup>

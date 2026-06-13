@@ -5,6 +5,7 @@
         mc:Ignorable="d"
         x:Class="SourceLens.Windows.SourceLibraryWindow"
         Title="Source library"
+        Icon="/Assets/logo.ico"
         Width="820"
         Height="580"
         CanResize="False"
