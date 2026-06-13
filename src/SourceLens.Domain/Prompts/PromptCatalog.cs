@@ -29,6 +29,14 @@ public static class PromptCatalog
         }).Trim();
     }
 
+    public static string ExpandQuery(string question)
+    {
+        return Render("rag-expand-query.md", new Dictionary<string, string>
+        {
+            ["question"] = question,
+        }).Trim();
+    }
+
     public static string SummariseChunk(string text)
     {
         return Render("summarise-chunk.md", new Dictionary<string, string>

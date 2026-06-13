@@ -194,6 +194,13 @@ public class GeneralOptions
         public bool RewriteFollowUpQueries { get; set; } = true;
 
         /// <summary>
+        /// Расширять первый вопрос диалога отдельным вызовом LLM перед ретривом (нормализация,
+        /// аббревиатуры, синонимы). true — точнее, но +1 LLM-вызов и задержка на старте диалога;
+        /// false — первый вопрос идёт в ретрив как есть.
+        /// </summary>
+        public bool ExpandInitialQuery { get; set; } = true;
+
+        /// <summary>
         /// Минимальная длина вопроса для запуска retrieval; короче — без источников.
         /// </summary>
         public int MinQueryLength { get; set; } = 3;

@@ -169,8 +169,9 @@ public class RagDialogManager
             // переписываем его в самодостаточный запрос с опорой на историю диалога.
             var retrievalQuery = priorPairs.Length > 0
                 ? await BuildStandaloneQuery(question, priorContext, sessionId)
-                : question;
-            // priorPairs.Length == 0 — первый вопрос диалога, переписывать нечего.
+                : await BuildExpandedQuery(question);
+            // priorPairs.Length == 0 — первый вопрос диалога: переписывать по истории нечего,
+            // расширяем сам запрос (нормализация/синонимы) для лучшего ретрива.
             sources = await _retriever.Retrieve(retrievalQuery, _retrievalOptions.TopK, resolved.Scope, ct);
         }
 
@@ -232,6 +233,26 @@ public class RagDialogManager
         {
             Logger.Warn(ex, "Follow-up query rewrite failed; using heuristic fallback");
             return HeuristicStandaloneQuery(question, sessionId);
+        }
+    }
+
+    /// <summary>
+    /// LLM-расширение первого (самодостаточного) вопроса диалога перед ретривом; при сбое (или когда
+    /// расширение выключено в настройках) — исходный вопрос как есть. Не валит весь ответ из-за расширения.
+    /// </summary>
+    private async Task<string> BuildExpandedQuery(string question)
+    {
+        if (!_retrievalOptions.ExpandInitialQuery)
+            return question;
+
+        try
+        {
+            return await _getLlm().ExpandQuery(question);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(ex, "Initial query expansion failed; using raw question");
+            return question;
         }
     }
 

@@ -28,6 +28,21 @@ public abstract class AbstractLlmInferences
         return string.IsNullOrWhiteSpace(rewritten) ? question : rewritten;
     }
 
+    /// <summary>
+    /// Расширяет первый (самодостаточный) вопрос диалога в поисковый запрос: нормализует фразу,
+    /// разворачивает аббревиатуры, добавляет ключевые синонимы для recall.
+    /// Пустой вопрос или пустой результат модели — fallback на исходный вопрос.
+    /// </summary>
+    public virtual async Task<string> ExpandQuery(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+            return question;
+
+        var prompt = PromptCatalog.ExpandQuery(question);
+        var expanded = (await Question(prompt))?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(expanded) ? question : expanded;
+    }
+
     public virtual async Task<string> SummariseChunk(string text)
     {
         if (string.IsNullOrWhiteSpace(text))

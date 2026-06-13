@@ -390,15 +390,53 @@ public class RagDialogManagerTests
     }
 
     [Test]
-    public async Task Ask_NoHistory_RetrievesWithRawQuestion_NoRewrite()
+    public async Task Ask_NoHistory_ExpandsInitialQuery()
     {
         _retriever.Chunks = new[] { new KnowledgeChunk { Text = "x", Score = 0.9f } };
-        var manager = CreateManager();
+        var llm = new DelegatingLlm(prompt => Task.FromResult(
+            prompt.Contains("first message of a new conversation") ? "expanded standalone query" : "final answer"));
+        var manager = new RagDialogManager(() => Global.CreateContext(_builder), () => llm, _retriever,
+            new RetrievalOptions { TopK = 4, MinQueryLength = 1 }, new RagDialogOptions());
+
+        await manager.Ask("What is entropy in thermodynamics?");
+
+        Assert.That(_retriever.Calls.Single().Query, Is.EqualTo("expanded standalone query"),
+            "первый вопрос диалога расширяется в поисковый запрос перед ретривом");
+    }
+
+    [Test]
+    public async Task Ask_NoHistory_ExpandDisabled_UsesRawQuestionWithoutExtraLlmCall()
+    {
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "x", Score = 0.9f } };
+        var calls = 0;
+        var llm = new DelegatingLlm(_ => { calls++; return Task.FromResult("final answer"); });
+        var manager = new RagDialogManager(() => Global.CreateContext(_builder), () => llm, _retriever,
+            new RetrievalOptions { TopK = 4, MinQueryLength = 1, ExpandInitialQuery = false }, new RagDialogOptions());
 
         await manager.Ask("What is entropy in thermodynamics?");
 
         Assert.That(_retriever.Calls.Single().Query, Is.EqualTo("What is entropy in thermodynamics?"),
-            "первый вопрос диалога не переписывается");
+            "расширение выключено → в ретрив идёт сырой вопрос");
+        Assert.That(calls, Is.EqualTo(1), "только вызов ответа, без отдельного вызова расширения");
+    }
+
+    [Test]
+    public async Task Ask_NoHistory_ExpansionThrows_FallsBackToRawQuestion()
+    {
+        _retriever.Chunks = new[] { new KnowledgeChunk { Text = "x", Score = 0.9f } };
+        var llm = new DelegatingLlm(prompt =>
+        {
+            if (prompt.Contains("first message of a new conversation"))
+                throw new InvalidOperationException("expansion boom");
+            return Task.FromResult("final answer");
+        });
+        var manager = new RagDialogManager(() => Global.CreateContext(_builder), () => llm, _retriever,
+            new RetrievalOptions { TopK = 4, MinQueryLength = 1 }, new RagDialogOptions());
+
+        await manager.Ask("What is entropy in thermodynamics?");
+
+        Assert.That(_retriever.Calls.Single().Query, Is.EqualTo("What is entropy in thermodynamics?"),
+            "сбой расширения не валит ответ — ретрив по сырому вопросу");
     }
 
     [Test]

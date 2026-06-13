@@ -213,6 +213,7 @@ public partial class App : Application
             MmrLambda = options.Rag.MmrLambda,
             HybridSearch = options.Rag.HybridSearch,
             RewriteFollowUpQueries = options.Rag.RewriteFollowUpQueries,
+            ExpandInitialQuery = options.Rag.ExpandInitialQuery,
         };
 
         if (!options.Rag.Enabled)
